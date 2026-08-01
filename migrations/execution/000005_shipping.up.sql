@@ -1,0 +1,4 @@
+CREATE TABLE shipment (shipment_id text PRIMARY KEY,order_id text NOT NULL UNIQUE,warehouse_id text NOT NULL,status text NOT NULL,carrier text NULL,tracking_number text NULL,picking_complete boolean NOT NULL DEFAULT false,version bigint NOT NULL CHECK(version>0),updated_at timestamptz NOT NULL);
+CREATE TABLE shipment_package (package_id text PRIMARY KEY,shipment_id text NOT NULL REFERENCES shipment(shipment_id) ON DELETE CASCADE,status text NOT NULL,weight_grams bigint NOT NULL CHECK(weight_grams>0));
+CREATE TABLE shipping_command_status (command_id uuid PRIMARY KEY,idempotency_key text NOT NULL UNIQUE,shipment_id text NOT NULL,warehouse_id text NOT NULL,operator_id text NOT NULL,status text NOT NULL,result_json jsonb NOT NULL,created_at timestamptz NOT NULL DEFAULT now());
+CREATE INDEX shipment_scope_idx ON shipment(warehouse_id,status,shipment_id);

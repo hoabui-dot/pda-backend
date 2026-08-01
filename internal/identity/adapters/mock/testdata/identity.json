@@ -1,0 +1,1 @@
+{"fixtureVersion":1,"operators":[{"id":"OP-01","username":"operator","displayName":"Demo Operator","password":"demo-password","roles":["RECEIVING_OPERATOR"],"warehouseIds":["WH-01"]}],"warehouses":[{"id":"WH-01","name":"Demo Warehouse"}]}

@@ -1,0 +1,411 @@
+openapi: 3.0.3
+info:
+  title: PDA Backend API
+  version: 0.2.0
+  description: BE-01 public authentication, identity, device, warehouse, and bootstrap contract.
+servers:
+  - url: /api/pda/v1
+paths:
+  /healthz:
+    get:
+      responses:
+        '200': {description: Healthy}
+  /livez:
+    get:
+      responses:
+        '200': {description: Live}
+  /readyz:
+    get:
+      responses:
+        '200': {description: Ready}
+  /auth/login:
+    post:
+      operationId: mockLogin
+      description: Local/test mock login. Production rejects mock auth mode.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/LoginRequest'}
+      responses:
+        '200': {description: Authenticated}
+        '401': {description: Invalid credentials}
+        '429': {description: Rate limited}
+  /auth/refresh:
+    post:
+      operationId: refreshMockToken
+      security: [{bearerAuth: []}]
+      responses:
+        '200': {description: Token rotated}
+        '401': {description: Unauthorized}
+        '429': {description: Rate limited}
+  /auth/logout:
+    post:
+      operationId: logout
+      security: [{bearerAuth: []}]
+      responses:
+        '204': {description: Token revoked}
+        '401': {description: Unauthorized}
+  /me:
+    get:
+      operationId: currentOperator
+      security: [{bearerAuth: []}]
+      responses:
+        '200': {description: Current trusted operator}
+        '401': {description: Unauthorized}
+  /me/warehouses:
+    get:
+      operationId: operatorWarehouses
+      security: [{bearerAuth: []}]
+      responses:
+        '200': {description: Allowed warehouses}
+        '401': {description: Unauthorized}
+  /devices/registrations:
+    post:
+      operationId: registerDevice
+      security: [{bearerAuth: []}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/DeviceRegistrationRequest'}
+      responses:
+        '201': {description: Registered}
+        '401': {description: Unauthorized}
+        '403': {description: Warehouse denied}
+  /bootstrap:
+    get:
+      operationId: bootstrap
+      security: [{bearerAuth: []}]
+      parameters:
+        - {$ref: '#/components/parameters/CorrelationId'}
+        - {$ref: '#/components/parameters/DeviceId'}
+        - {$ref: '#/components/parameters/WarehouseId'}
+      responses:
+        '200': {description: Trusted operator/device/warehouse context}
+        '401': {description: Unauthorized}
+        '403': {description: Warehouse denied}
+  /dashboard:
+    get:
+      operationId: dashboard
+      security: [{bearerAuth: []}]
+      parameters: [{$ref: '#/components/parameters/DeviceId'}, {$ref: '#/components/parameters/WarehouseId'}]
+      responses:
+        '200': {description: Operator dashboard counts}
+  /tasks/summary:
+    get:
+      operationId: taskSummary
+      security: [{bearerAuth: []}]
+      parameters:
+        - {$ref: '#/components/parameters/DeviceId'}
+        - {$ref: '#/components/parameters/WarehouseId'}
+        - {name: status, in: query, schema: {type: string}}
+      responses:
+        '200': {description: Counts grouped by category and status}
+  /tasks:
+    get:
+      operationId: listTasks
+      security: [{bearerAuth: []}]
+      parameters:
+        - {$ref: '#/components/parameters/DeviceId'}
+        - {$ref: '#/components/parameters/WarehouseId'}
+        - {name: category, in: query, schema: {type: string}}
+        - {name: status, in: query, schema: {type: string}}
+        - {name: cursor, in: query, schema: {type: string}}
+        - {name: q, in: query, schema: {type: string}}
+        - {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 100}}
+      responses:
+        '200': {description: Cursor-paginated task page}
+  /tasks/{taskId}/claim:
+    post:
+      operationId: claimTask
+      security: [{bearerAuth: []}]
+      parameters:
+        - {name: taskId, in: path, required: true, schema: {type: string}}
+        - {$ref: '#/components/parameters/DeviceId'}
+        - {$ref: '#/components/parameters/WarehouseId'}
+        - {$ref: '#/components/parameters/IdempotencyKey'}
+        - {$ref: '#/components/parameters/IfMatch'}
+      responses:
+        '200': {description: Task claimed or prior idempotent result}
+        '409': {description: Task locked or version conflict}
+  /tasks/{taskId}/release:
+    post:
+      operationId: releaseTask
+      security: [{bearerAuth: []}]
+      parameters:
+        - {name: taskId, in: path, required: true, schema: {type: string}}
+        - {$ref: '#/components/parameters/DeviceId'}
+        - {$ref: '#/components/parameters/WarehouseId'}
+        - {$ref: '#/components/parameters/IdempotencyKey'}
+        - {$ref: '#/components/parameters/IfMatch'}
+      responses:
+        '200': {description: Task released or prior idempotent result}
+        '409': {description: Version conflict}
+  /receiving/tasks:
+    get:
+      operationId: listReceivingTasks
+      security: [{bearerAuth: []}]
+      responses: {'200': {description: Cursor-paginated receiving tasks}}
+  /receiving/tasks/{taskId}:
+    get:
+      operationId: receivingDetail
+      security: [{bearerAuth: []}]
+      parameters: [{name: taskId, in: path, required: true, schema: {type: string}}]
+      responses: {'200': {description: Receiving task and lines}}
+  /receiving/tasks/{taskId}/start:
+    post:
+      operationId: startReceivingTask
+      security: [{bearerAuth: []}]
+      parameters: [{name: taskId, in: path, required: true, schema: {type: string}}, {$ref: '#/components/parameters/IdempotencyKey'}, {$ref: '#/components/parameters/IfMatch'}]
+      responses: {'200': {description: Task started}, '409': {description: Version conflict}}
+  /receiving/tasks/{taskId}/barcode-resolutions:
+    post:
+      operationId: resolveReceivingBarcode
+      security: [{bearerAuth: []}]
+      parameters: [{name: taskId, in: path, required: true, schema: {type: string}}]
+      responses: {'200': {description: Line resolved}, '422': {description: Unknown or wrong-context barcode}}
+  /receiving/tasks/{taskId}/receipts:
+    post:
+      operationId: confirmReceivingQuantity
+      security: [{bearerAuth: []}]
+      parameters: [{name: taskId, in: path, required: true, schema: {type: string}}, {$ref: '#/components/parameters/IdempotencyKey'}, {$ref: '#/components/parameters/IfMatch'}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/ConfirmReceiptRequest'}
+      responses: {'200': {description: Quantity committed or replayed}, '409': {description: Version conflict}, '422': {description: Quantity policy violation}}
+  /receiving/tasks/{taskId}/completion:
+    post:
+      operationId: completeReceivingTask
+      security: [{bearerAuth: []}]
+      parameters: [{name: taskId, in: path, required: true, schema: {type: string}}, {$ref: '#/components/parameters/IdempotencyKey'}, {$ref: '#/components/parameters/IfMatch'}]
+      responses: {'200': {description: Receiving completed}, '422': {description: Task incomplete}}
+  /receiving/commands/{commandId}:
+    get:
+      operationId: receivingCommandStatus
+      security: [{bearerAuth: []}]
+      parameters: [{name: commandId, in: path, required: true, schema: {type: string, format: uuid}}]
+      responses: {'200': {description: Durable command result}, '404': {description: Command not found}}
+  /putaway/tasks:
+    get: {operationId: listPutawayTasks, security: [{bearerAuth: []}], responses: {'200': {description: Putaway tasks}}}
+  /putaway/tasks/{taskId}:
+    get: {operationId: putawayDetail, security: [{bearerAuth: []}], parameters: [{name: taskId, in: path, required: true, schema: {type: string}}], responses: {'200': {description: Putaway task}}}
+  /putaway/tasks/{taskId}/source-validations:
+    post: {$ref: '#/components/x-movementValidation'}
+  /putaway/tasks/{taskId}/destination-suggestions:
+    get: {operationId: putawayDestinationSuggestions, security: [{bearerAuth: []}], parameters: [{name: taskId, in: path, required: true, schema: {type: string}}], responses: {'200': {description: Compatible destinations with capacity}}}
+  /putaway/tasks/{taskId}/destination-validations:
+    post: {$ref: '#/components/x-movementValidation'}
+  /putaway/tasks/{taskId}/confirmation:
+    post: {$ref: '#/components/x-movementConfirmation'}
+  /picking/tasks:
+    get: {operationId: listPickingTasks, security: [{bearerAuth: []}], responses: {'200': {description: Picking tasks}}}
+  /picking/tasks/{taskId}:
+    get: {operationId: pickingDetail, security: [{bearerAuth: []}], parameters: [{name: taskId, in: path, required: true, schema: {type: string}}], responses: {'200': {description: Picking task and current line}}}
+  /picking/tasks/{taskId}/location-validations:
+    post: {$ref: '#/components/x-movementValidation'}
+  /picking/tasks/{taskId}/barcode-resolutions:
+    post: {$ref: '#/components/x-movementValidation'}
+  /picking/tasks/{taskId}/picks:
+    post: {$ref: '#/components/x-movementConfirmation'}
+  /picking/tasks/{taskId}/completion:
+    post: {$ref: '#/components/x-movementCommand'}
+  /replenishment/tasks:
+    get: {operationId: listReplenishmentTasks, security: [{bearerAuth: []}], responses: {'200': {description: Replenishment tasks}}}
+  /replenishment/tasks/{taskId}:
+    get: {operationId: replenishmentDetail, security: [{bearerAuth: []}], parameters: [{name: taskId, in: path, required: true, schema: {type: string}}], responses: {'200': {description: Replenishment task}}}
+  /replenishment/tasks/{taskId}/source-validations:
+    post: {$ref: '#/components/x-movementValidation'}
+  /replenishment/tasks/{taskId}/destination-validations:
+    post: {$ref: '#/components/x-movementValidation'}
+  /replenishment/tasks/{taskId}/item-validations:
+    post: {$ref: '#/components/x-movementValidation'}
+  /replenishment/tasks/{taskId}/confirmation:
+    post: {$ref: '#/components/x-movementConfirmation'}
+  /inventory/search:
+    get: {security: [{bearerAuth: []}], parameters: [{name: q, in: query, schema: {type: string}}], responses: {'200': {description: Authoritative item and bin search with asOf}}}
+  /inventory/balances:
+    get: {security: [{bearerAuth: []}], parameters: [{name: itemId, in: query, schema: {type: string}}, {name: locationId, in: query, schema: {type: string}}], responses: {'200': {description: Authoritative balances with asOf}}}
+  /inventory/movements:
+    get: {security: [{bearerAuth: []}], parameters: [{name: itemId, in: query, schema: {type: string}}, {name: cursor, in: query, schema: {type: string}}], responses: {'200': {description: Movement ledger history}}}
+  /inventory/transfers/source-validations:
+    post: {$ref: '#/components/x-transferValidation'}
+  /inventory/transfers/destination-validations:
+    post: {$ref: '#/components/x-transferValidation'}
+  /inventory/transfers/item-resolutions:
+    post: {$ref: '#/components/x-transferValidation'}
+  /inventory/transfers:
+    post: {$ref: '#/components/x-transferCommand'}
+  /cycle-count/tasks:
+    get: {security: [{bearerAuth: []}], responses: {'200': {description: Cycle count tasks}}}
+  /cycle-count/tasks/{taskId}:
+    get: {security: [{bearerAuth: []}], parameters: [{name: taskId, in: path, required: true, schema: {type: string}}], responses: {'200': {description: Count task and lines}}}
+  /cycle-count/tasks/{taskId}/counts:
+    post: {$ref: '#/components/x-countCommand'}
+  /cycle-count/tasks/{taskId}/recounts:
+    post: {$ref: '#/components/x-countCommand'}
+  /cycle-count/tasks/{taskId}/completion:
+    post: {$ref: '#/components/x-movementCommand'}
+  /shipments/{shipmentId}:
+    get: {security: [{bearerAuth: []}], parameters: [{name: shipmentId, in: path, required: true, schema: {type: string}}], responses: {'200': {description: Shipment package carrier tracking and version summary}}}
+  /shipments/{shipmentId}/readiness:
+    get: {security: [{bearerAuth: []}], parameters: [{name: shipmentId, in: path, required: true, schema: {type: string}}], responses: {'200': {description: Authoritative cross-domain readiness}}}
+  /shipments/{shipmentId}/confirmation:
+    post:
+      security: [{bearerAuth: []}]
+      parameters: [{name: shipmentId, in: path, required: true, schema: {type: string}}, {$ref: '#/components/parameters/IdempotencyKey'}, {$ref: '#/components/parameters/IfMatch'}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/ShipmentConfirmationRequest'}}}}
+      responses: {'200': {description: Shipment confirmed or replayed}, '409': {description: Stale version}, '422': {description: Readiness carrier tracking or package invalid}}
+  /shipments/{shipmentId}/commands/{commandId}:
+    get: {security: [{bearerAuth: []}], parameters: [{name: shipmentId, in: path, required: true, schema: {type: string}}, {name: commandId, in: path, required: true, schema: {type: string, format: uuid}}], responses: {'200': {description: Durable shipping command result}}}
+components:
+  x-transferValidation:
+    security: [{bearerAuth: []}]
+    requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/TransferRequest'}}}}
+    responses: {'200': {description: Transfer step valid}, '422': {description: Location item or stock invalid}}
+  x-transferCommand:
+    security: [{bearerAuth: []}]
+    parameters: [{$ref: '#/components/parameters/IdempotencyKey'}]
+    requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/TransferRequest'}}}}
+    responses: {'200': {description: Transfer committed or replayed}, '422': {description: Transfer rejected}}
+  x-countCommand:
+    security: [{bearerAuth: []}]
+    parameters: [{name: taskId, in: path, required: true, schema: {type: string}}, {$ref: '#/components/parameters/IdempotencyKey'}, {$ref: '#/components/parameters/IfMatch'}]
+    responses: {'200': {description: Count command committed or replayed}, '409': {description: Version conflict}}
+  x-movementCommand:
+    security: [{bearerAuth: []}]
+    parameters: [{name: taskId, in: path, required: true, schema: {type: string}}, {$ref: '#/components/parameters/IdempotencyKey'}, {$ref: '#/components/parameters/IfMatch'}]
+    responses: {'200': {description: Movement command committed or replayed}, '409': {description: Version conflict}, '422': {description: Workflow validation failed}}
+  x-movementValidation:
+    security: [{bearerAuth: []}]
+    parameters: [{name: taskId, in: path, required: true, schema: {type: string}}, {$ref: '#/components/parameters/IdempotencyKey'}, {$ref: '#/components/parameters/IfMatch'}]
+    requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/MovementValidationRequest'}}}}
+    responses: {'200': {description: Validation accepted or replayed}, '409': {description: Version conflict}, '422': {description: Invalid source destination or item}}
+  x-movementConfirmation:
+    security: [{bearerAuth: []}]
+    parameters: [{name: taskId, in: path, required: true, schema: {type: string}}, {$ref: '#/components/parameters/IdempotencyKey'}, {$ref: '#/components/parameters/IfMatch'}]
+    requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/MovementQuantityRequest'}}}}
+    responses: {'200': {description: Inventory moved or prior result replayed}, '409': {description: Version conflict}, '422': {description: Stock capacity or quantity violation}}
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  parameters:
+    CorrelationId:
+      name: X-Correlation-Id
+      in: header
+      required: false
+      schema: {type: string, format: uuid}
+    DeviceId:
+      name: X-Device-Id
+      in: header
+      required: true
+      schema: {type: string, minLength: 1}
+    WarehouseId:
+      name: X-Warehouse-Id
+      in: header
+      required: true
+      schema: {type: string, minLength: 1}
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      schema: {type: string, format: uuid}
+    IfMatch:
+      name: If-Match
+      in: header
+      required: true
+      schema: {type: string}
+  schemas:
+    ShipmentConfirmationRequest:
+      type: object
+      required: [carrier, trackingNumber]
+      additionalProperties: false
+      properties:
+        carrier: {type: string}
+        trackingNumber: {type: string, minLength: 6, maxLength: 40}
+    TransferRequest:
+      type: object
+      required: [sourceLocation, destinationLocation, itemId, quantity]
+      additionalProperties: false
+      properties:
+        sourceLocation: {type: string}
+        destinationLocation: {type: string}
+        itemId: {type: string}
+        quantity: {type: integer, minimum: 1}
+    MovementValidationRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        value: {type: string}
+        location: {type: string}
+        barcode: {type: string}
+    MovementQuantityRequest:
+      type: object
+      required: [quantity]
+      additionalProperties: false
+      properties:
+        quantity: {type: integer, format: int64, minimum: 1}
+    LoginRequest:
+      type: object
+      required: [username, password]
+      additionalProperties: false
+      properties:
+        username: {type: string, minLength: 1, maxLength: 128}
+        password: {type: string, minLength: 1, maxLength: 256}
+    DeviceRegistrationRequest:
+      type: object
+      required: [deviceId, warehouseId]
+      additionalProperties: false
+      properties:
+        deviceId: {type: string, minLength: 1, maxLength: 128}
+        warehouseId: {type: string, minLength: 1, maxLength: 64}
+    Dashboard:
+      type: object
+      required: [total, assigned, inProgress, completed, highPriority, updatedAt]
+      properties:
+        total: {type: integer}
+        assigned: {type: integer}
+        inProgress: {type: integer}
+        completed: {type: integer}
+        highPriority: {type: integer}
+        updatedAt: {type: string, format: date-time}
+    Task:
+      type: object
+      required: [id, category, status, priority, warehouseId, version, updatedAt]
+      properties:
+        id: {type: string}
+        category: {type: string, enum: [RECEIVING, PUTAWAY, PICKING, REPLENISHMENT, CYCLE_COUNT]}
+        status: {type: string, enum: [NEW, ASSIGNED, IN_PROGRESS, COMPLETED, ON_HOLD]}
+        priority: {type: integer, minimum: 0, maximum: 100}
+        warehouseId: {type: string}
+        operatorId: {type: string, nullable: true}
+        version: {type: integer, format: int64}
+        updatedAt: {type: string, format: date-time}
+    TaskPage:
+      type: object
+      required: [items]
+      properties:
+        items: {type: array, items: {$ref: '#/components/schemas/Task'}}
+        nextCursor: {type: string, nullable: true}
+    TaskSummaryItem:
+      type: object
+      required: [category, status, count]
+      properties:
+        category: {type: string}
+        status: {type: string}
+        count: {type: integer}
+    ConfirmReceiptRequest:
+      type: object
+      required: [commandId, lineId, barcode, quantity, baseVersion]
+      additionalProperties: false
+      properties:
+        commandId: {type: string, format: uuid}
+        lineId: {type: string}
+        barcode: {type: string}
+        quantity: {type: integer, format: int64, minimum: 1}
+        remark: {type: string, nullable: true, maxLength: 500}
+        baseVersion: {type: integer, format: int64}

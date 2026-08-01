@@ -1,0 +1,17 @@
+name: backend-ci
+on:
+  push:
+  pull_request:
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24.x'
+          cache: true
+      - run: go mod download
+      - run: docker compose -f docker/compose.yml up -d --wait postgres redis
+      - run: make verify
+      - run: docker compose -f docker/compose.yml config

@@ -1,0 +1,12 @@
+pda:
+  messaging:
+    mode: mock
+  upstream-wms:
+    mode: mock
+  auth:
+    mode: mock
+  gateway:
+    request-timeout: 5s
+    auth-rate-limit: 10
+    auth-rate-window: 1m
+    circuit-failure-threshold: 5
