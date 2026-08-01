@@ -20,22 +20,11 @@ services:
       interval: 5s
       timeout: 3s
       retries: 10
-  kafka:
-    image: redpandadata/redpanda:v24.3.9
-    command:
-      - redpanda
-      - start
-      - --overprovisioned
-      - --smp=1
-      - --memory=1G
-      - --reserve-memory=0M
-      - --check=false
-      - --node-id=0
-      - --kafka-addr=internal://0.0.0.0:9092,external://0.0.0.0:19092
-      - --advertise-kafka-addr=internal://kafka:9092,external://localhost:19092
-    ports: ["${PDA_KAFKA_PORT:-19092}:19092"]
-    healthcheck:
-      test: ["CMD-SHELL", "rpk cluster health --api-urls localhost:9644 | grep -q Healthy"]
-      interval: 5s
-      timeout: 5s
-      retries: 20
+
+# Kafka is provided by the shared MES platform. PDA must not start a second
+# broker or bind the shared host port independently.
+
+networks:
+  platform:
+    external: true
+    name: ${PDA_PLATFORM_NETWORK_NAME:-platform-net}

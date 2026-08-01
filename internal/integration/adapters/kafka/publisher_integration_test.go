@@ -3,6 +3,8 @@ package kafka
 import (
 	"context"
 	"net"
+	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -12,6 +14,30 @@ import (
 )
 
 type testInbox struct{ seen map[uuid.UUID]bool }
+
+func testBrokers() []string {
+	value := os.Getenv("PDA_KAFKA_BROKERS")
+	if value == "" {
+		value = "127.0.0.1:19092"
+	}
+	return strings.Split(value, ",")
+}
+
+func ensureTestTopics(t *testing.T, topics ...string) {
+	t.Helper()
+	conn, err := kafkago.Dial("tcp", testBrokers()[0])
+	if err != nil {
+		t.Skipf("Kafka broker unavailable: %v", err)
+	}
+	defer conn.Close()
+	configs := make([]kafkago.TopicConfig, 0, len(topics))
+	for _, topic := range topics {
+		configs = append(configs, kafkago.TopicConfig{Topic: topic, NumPartitions: 3, ReplicationFactor: 1})
+	}
+	if err := conn.CreateTopics(configs...); err != nil {
+		t.Fatalf("create Kafka test topics: %v", err)
+	}
+}
 
 func (s *testInbox) AlreadyProcessed(_ context.Context, id uuid.UUID) (bool, error) {
 	return s.seen[id], nil
@@ -25,13 +51,15 @@ func (s *testInbox) MoveToDLQ(context.Context, event.DomainEventEnvelope, string
 }
 
 func TestPublisherRoundTrip(t *testing.T) {
-	if conn, err := net.DialTimeout("tcp", "127.0.0.1:19092", time.Second); err != nil {
+	brokers := testBrokers()
+	if conn, err := net.DialTimeout("tcp", brokers[0], time.Second); err != nil {
 		t.Skip("Kafka broker unavailable")
 	} else {
 		_ = conn.Close()
 	}
-	topic := "pda-be08-test"
-	p, err := NewPublisher(Config{Brokers: []string{"127.0.0.1:19092"}, GroupID: "be08-test", TopicPrefix: "pda"})
+	topic := "task.events"
+	ensureTestTopics(t, "pda."+topic)
+	p, err := NewPublisher(Config{Brokers: brokers, GroupID: "pda-be08-producer-test", TopicPrefix: "pda"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -41,7 +69,7 @@ func TestPublisherRoundTrip(t *testing.T) {
 	if err := p.Publish(ctx, e); err != nil {
 		t.Fatal(err)
 	}
-	r := kafkago.NewReader(kafkago.ReaderConfig{Brokers: []string{"127.0.0.1:19092"}, Topic: "pda." + topic, GroupID: "be08-reader-" + uuid.NewString(), MinBytes: 1, MaxBytes: 1 << 20})
+	r := kafkago.NewReader(kafkago.ReaderConfig{Brokers: brokers, Topic: "pda." + topic, GroupID: "pda-be08-reader-" + uuid.NewString(), MinBytes: 1, MaxBytes: 1 << 20})
 	defer r.Close()
 	m, err := r.ReadMessage(ctx)
 	if err != nil {
@@ -53,13 +81,15 @@ func TestPublisherRoundTrip(t *testing.T) {
 }
 
 func TestConsumerGroupProcessesAndMarksInbox(t *testing.T) {
-	if conn, err := net.DialTimeout("tcp", "127.0.0.1:19092", time.Second); err != nil {
+	brokers := testBrokers()
+	if conn, err := net.DialTimeout("tcp", brokers[0], time.Second); err != nil {
 		t.Skip("Kafka broker unavailable")
 	} else {
 		_ = conn.Close()
 	}
-	topic := "pda-be08-test"
-	p, err := NewPublisher(Config{Brokers: []string{"127.0.0.1:19092"}, GroupID: "be08-test", TopicPrefix: "pda"})
+	topic := "task.events"
+	ensureTestTopics(t, "pda."+topic)
+	p, err := NewPublisher(Config{Brokers: brokers, GroupID: "pda-be08-consumer-producer-test", TopicPrefix: "pda"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -71,7 +101,7 @@ func TestConsumerGroupProcessesAndMarksInbox(t *testing.T) {
 	}
 	store := &testInbox{seen: map[uuid.UUID]bool{}}
 	processed := make(chan struct{}, 1)
-	c, err := NewConsumer(Config{Brokers: []string{"127.0.0.1:19092"}, GroupID: "be08-consumer-" + uuid.NewString(), TopicPrefix: "pda"}, topic, store, func(_ context.Context, got event.DomainEventEnvelope) error {
+	c, err := NewConsumer(Config{Brokers: brokers, GroupID: "pda-be08-consumer-" + uuid.NewString(), TopicPrefix: "pda"}, topic, store, func(_ context.Context, got event.DomainEventEnvelope) error {
 		if got.EventID == e.EventID {
 			processed <- struct{}{}
 		}
@@ -91,6 +121,14 @@ func TestConsumerGroupProcessesAndMarksInbox(t *testing.T) {
 	}
 	if !store.seen[e.EventID] {
 		t.Fatal("consumer did not mark inbox")
+	}
+	if err := p.Publish(ctx, e); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-processed:
+		t.Fatal("duplicate event was processed twice")
+	case <-time.After(250 * time.Millisecond):
 	}
 }
 

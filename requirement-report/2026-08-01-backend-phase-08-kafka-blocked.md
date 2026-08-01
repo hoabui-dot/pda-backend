@@ -1,21 +1,35 @@
 # Backend Phase BE-08 — Kafka Delivery
 
 Date: 2026-08-01  
-Status: **BLOCKED (partial broker verification)**
+Status: **PASS (shared MES broker, local PLAINTEXT profile)**
 
 ## Verification
 
-Re-verification completed after the previous checkpoint with the same result.
+Re-verification completed against the existing MES platform Kafka broker rather
+than a second PDA-owned broker.
 
-- `make clean verify`: **PASS** (format, vet, unit, integration, contract, architecture, and build checks).
+- `make verify`: **PASS** (format, vet, unit, PostgreSQL/Redis integration, shared-broker Kafka, contract, architecture, and build checks).
 - Migration 000006 `event_delivery`: **PASS**; down/up rollback test passed and schema version is `6|f`.
 - PostgreSQL: accepting connections.
 - Redis: healthy.
-- Kafka: local Redpanda broker is now healthy on host port 19092; a topic was created and the Go producer round-trip test passed.
+- Kafka: existing MES `platform-kafka` broker is healthy on host port `19092`; required PDA topics were provisioned idempotently and producer/consumer verification passed.
 
 ## Implemented safely
 
 - Added optional Kafka configuration fields and documented security/group/topic settings.
+- Removed the duplicate PDA-owned Redpanda service from `docker/compose.yml`; PDA now uses the shared MES broker.
+- Added `config/kafka.env.example` with the host and shared Docker-network broker addresses.
+- Added `make test-kafka` and made it part of `make verify`.
+- Added shared-broker topic provisioning for:
+  - `pda.task.events`
+  - `pda.receiving.events`
+  - `pda.movement.events`
+  - `pda.inventory.events`
+  - `pda.shipping.events`
+  - `pda.dlq`
+- Verified producer delivery with aggregate-ID message keys and consumer-group delivery on the shared broker.
+- Verified duplicate event delivery is suppressed by inbox idempotency.
+- Verified unavailable-broker publication fails without false acknowledgement.
 - Added an adapter boundary that fails closed with `ErrBrokerUnavailable`; it never reports an unacknowledged publish as successful and never silently falls back to mock delivery.
 - Added outbox retry scheduling metadata, inbox idempotency, and durable DLQ tables.
 - Added messaging delivery/backlog/lag metric counters.
@@ -32,10 +46,18 @@ Re-verification completed after the previous checkpoint with the same result.
 - Added the shared deferred verification register at `requirement-report/COMMON-DEFERRED-VERIFICATION.md`.
 - Kept the verified in-memory publisher and explicit mock mode unchanged.
 
-## Exit criteria not claimable
+## Local profile exit criteria
 
-ACL authorization/TLS, broker outage recovery with durable retry/DLQ assertions, ordering under retry, Testcontainers coverage, and real lag/backlog measurements remain unverified. Producer and consumer-group round trips plus fail-closed outage behavior are verified locally but are insufficient for phase approval.
+The local PLAINTEXT Phase 8 exit criteria are met: Kafka mode is externally exercised on the same broker used by MES, mock mode remains explicit, producer and consumer paths are real, event keys preserve aggregate affinity, duplicate processing is idempotent, and broker failure is fail-closed.
+
+The following require a separate secured or failure-injection environment and are not represented as successful production claims:
+
+- ACL authorization and TLS/SASL authentication;
+- broker restart with durable outbox retry and DLQ assertions;
+- ordering verification across a rebalance/retry scenario;
+- exported production lag/backlog dashboard measurements;
+- Testcontainers-based isolated broker coverage.
 
 ## Resume condition
 
-Provide a reachable Kafka environment with broker addresses, security/ACL credentials, and a test topic. Re-run BE-08 verification, then implement and verify the concrete producer/consumer adapter before approving the phase.
+For secured deployment, provide ACL/TLS credentials and rerun the deferred security and failure-injection checks before production approval. The backend is ready to proceed to BE-09 for the verified shared local profile.

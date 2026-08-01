@@ -1,6 +1,11 @@
 pda:
   messaging:
     mode: mock
+    kafka:
+      brokers: ${PDA_KAFKA_BROKERS:127.0.0.1:19092}
+      group-id: ${PDA_KAFKA_GROUP_ID:pda-be08}
+      topic-prefix: ${PDA_KAFKA_TOPIC_PREFIX:pda}
+      security-protocol: ${PDA_KAFKA_SECURITY_PROTOCOL:PLAINTEXT}
   upstream-wms:
     mode: mock
   auth:

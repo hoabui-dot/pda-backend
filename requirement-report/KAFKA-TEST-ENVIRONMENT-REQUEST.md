@@ -67,4 +67,4 @@ PDA_KAFKA_TLS_CA_FILE=<path, if applicable>
 8. Capture consumer lag/backlog metrics.
 9. Verify ACL denial with an unauthorized test principal.
 
-The current implementation intentionally fails closed for security protocols other than the verified local PLAINTEXT profile. Once the requested environment details are supplied, the adapter can be extended and the deferred cases in `COMMON-DEFERRED-VERIFICATION.md` can be closed.
+The shared MES platform now supplies the local PLAINTEXT test environment used by PDA: `platform-kafka`, reachable from the host at `127.0.0.1:19092` and from `platform-net` containers as `kafka:9092`. The PDA repository no longer starts a second broker. The test command provisions the required topics idempotently before exercising producer and consumer behavior. The current implementation still fails closed for unsupported security protocols; ACL/TLS verification requires a security-enabled broker.
