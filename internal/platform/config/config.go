@@ -2,7 +2,9 @@ package config
 
 import (
 	"fmt"
+	"net/url"
 	"os"
+	"strings"
 	"time"
 )
 
@@ -21,6 +23,8 @@ type Config struct {
 	KafkaGroupID          string
 	KafkaTopicPrefix      string
 	KafkaSecurityProtocol string
+	UpstreamWMSBaseURL    string
+	UpstreamWMSToken      string
 	Modes                 Modes
 }
 
@@ -34,6 +38,8 @@ func Load() (Config, error) {
 		KafkaGroupID:          valueOrDefault("PDA_KAFKA_GROUP_ID", "pda-backend"),
 		KafkaTopicPrefix:      valueOrDefault("PDA_KAFKA_TOPIC_PREFIX", "pda"),
 		KafkaSecurityProtocol: valueOrDefault("PDA_KAFKA_SECURITY_PROTOCOL", "PLAINTEXT"),
+		UpstreamWMSBaseURL:    valueOrDefault("PDA_UPSTREAM_WMS_BASE_URL", ""),
+		UpstreamWMSToken:      valueOrDefault("PDA_UPSTREAM_WMS_TOKEN", ""),
 		Modes: Modes{
 			Messaging:   valueOrDefault("PDA_MESSAGING_MODE", "mock"),
 			UpstreamWMS: valueOrDefault("PDA_UPSTREAM_WMS_MODE", "mock"),
@@ -61,6 +67,15 @@ func (c Config) Validate() error {
 	}
 	if !oneOf(c.Modes.Auth, "mock", "oidc") {
 		return fmt.Errorf("invalid auth mode %q", c.Modes.Auth)
+	}
+	if c.Modes.UpstreamWMS == "http" {
+		parsed, err := url.Parse(strings.TrimSpace(c.UpstreamWMSBaseURL))
+		if err != nil || parsed.Host == "" || !oneOf(parsed.Scheme, "http", "https") {
+			return fmt.Errorf("upstream WMS HTTP mode requires a valid HTTP(S) base URL")
+		}
+		if strings.TrimSpace(c.UpstreamWMSToken) == "" {
+			return fmt.Errorf("upstream WMS HTTP mode requires a bearer token")
+		}
 	}
 	if c.Environment == "production" && (c.Modes.Messaging == "mock" || c.Modes.UpstreamWMS == "mock" || c.Modes.Auth == "mock") {
 		return fmt.Errorf("production environment rejects mock modes")

@@ -8,6 +8,7 @@ pda:
       security-protocol: ${PDA_KAFKA_SECURITY_PROTOCOL:PLAINTEXT}
   upstream-wms:
     mode: mock
+    base-url: ${PDA_UPSTREAM_WMS_BASE_URL:}
   auth:
     mode: mock
   gateway:

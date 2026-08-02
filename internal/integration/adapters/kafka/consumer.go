@@ -25,6 +25,7 @@ type Consumer struct {
 }
 
 func NewConsumer(cfg Config, topic string, store DLQStore, process func(context.Context, event.DomainEventEnvelope) error) (*Consumer, error) {
+	cfg.Brokers = NormalizeBrokers(cfg.Brokers)
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
@@ -38,7 +39,7 @@ func NewConsumer(cfg Config, topic string, store DLQStore, process func(context.
 		return nil, fmt.Errorf("consumer topic, store, and handler are required")
 	}
 	return &Consumer{
-		reader: kafkago.NewReader(kafkago.ReaderConfig{Brokers: cfg.Brokers, GroupID: cfg.GroupID, Topic: cfg.TopicPrefix + "." + topic, MinBytes: 1, MaxBytes: 10 << 20, CommitInterval: 0}),
+		reader: kafkago.NewReader(kafkago.ReaderConfig{Brokers: cfg.Brokers, GroupID: cfg.GroupID, Topic: ResolveTopic(cfg.TopicPrefix, topic), MinBytes: 1, MaxBytes: 10 << 20, CommitInterval: 0}),
 		store:  store, process: process, maxAttempts: 3, Metrics: &messaging.Metrics{},
 	}, nil
 }

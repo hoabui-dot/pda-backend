@@ -14,11 +14,11 @@ Please provide a Kafka-compatible broker environment for full PDA backend integr
 
 Create these topics, or grant the test identity topic-create permission:
 
-- `pda.task.events`
-- `pda.receiving.events`
-- `pda.movement.events`
-- `pda.inventory.events`
-- `pda.shipping.events`
+- `pda.task.events.v1`
+- `pda.receiving.events.v1`
+- `pda.movement.events.v1`
+- `pda.inventory.events.v1`
+- `pda.shipping.events.v1`
 - `pda.dlq`
 
 Recommended settings: replication factor 1 for local testing, 3 for failover testing; at least 3 partitions for ordering/partition-key tests; retention of at least 24 hours.

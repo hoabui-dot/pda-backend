@@ -61,3 +61,13 @@ Outbound WMS adapters use explicit timeout, idempotent-only retry with jitter, `
 ## BE-08 conditional Kafka delivery
 
 Kafka delivery is configuration-gated and fail-closed. `PDA_MESSAGING_MODE=mock` remains the default local application mode. PDA uses the shared MES platform broker at `127.0.0.1:19092` for host-side verification; PDA Compose does not start a second Kafka broker. Selecting `kafka` requires `PDA_KAFKA_BROKERS`, a stable group ID/topic prefix, and a reachable, ACL-authorized broker; startup does not silently fall back to mock delivery. The delivery migration adds retry scheduling, inbox idempotency, and a durable DLQ boundary.
+
+## BE-09 WMS integration boundary
+
+The upstream WMS contract is not yet approved in this repository. `PDA_UPSTREAM_WMS_MODE=mock`
+therefore remains the only operational gateway mode, backed by deterministic fixture adapters. The
+gateway fails fast when `PDA_UPSTREAM_WMS_MODE=http` is selected; it never silently seeds or serves
+mock WMS data under an HTTP integration profile. The `UpstreamWMS` port, mock adapter, cache-aside
+wrapper, and resilience policy are ready for contract-driven implementation. WMS endpoint, event,
+authentication, mapping, checkpoint, replay, and reconciliation behavior remain deferred until the
+approved upstream ownership contract and staging environment are supplied.

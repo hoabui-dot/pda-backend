@@ -57,8 +57,8 @@ func TestPublisherRoundTrip(t *testing.T) {
 	} else {
 		_ = conn.Close()
 	}
-	topic := "task.events"
-	ensureTestTopics(t, "pda."+topic)
+	topic := "pda.task.events.v1"
+	ensureTestTopics(t, topic)
 	p, err := NewPublisher(Config{Brokers: brokers, GroupID: "pda-be08-producer-test", TopicPrefix: "pda"})
 	if err != nil {
 		t.Fatal(err)
@@ -69,14 +69,20 @@ func TestPublisherRoundTrip(t *testing.T) {
 	if err := p.Publish(ctx, e); err != nil {
 		t.Fatal(err)
 	}
-	r := kafkago.NewReader(kafkago.ReaderConfig{Brokers: brokers, Topic: "pda." + topic, GroupID: "pda-be08-reader-" + uuid.NewString(), MinBytes: 1, MaxBytes: 1 << 20})
+	r := kafkago.NewReader(kafkago.ReaderConfig{Brokers: brokers, Topic: topic, GroupID: "pda-be08-reader-" + uuid.NewString(), MinBytes: 1, MaxBytes: 1 << 20})
 	defer r.Close()
-	m, err := r.ReadMessage(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(m.Key) != e.AggregateID || string(m.Value) == "" {
-		t.Fatalf("unexpected Kafka message key/value")
+	for {
+		m, err := r.ReadMessage(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(m.Value), e.EventID.String()) {
+			continue
+		}
+		if string(m.Key) != e.AggregateID {
+			t.Fatalf("unexpected Kafka message key %q", string(m.Key))
+		}
+		break
 	}
 }
 
@@ -87,8 +93,8 @@ func TestConsumerGroupProcessesAndMarksInbox(t *testing.T) {
 	} else {
 		_ = conn.Close()
 	}
-	topic := "task.events"
-	ensureTestTopics(t, "pda."+topic)
+	topic := "pda.task.events.v1"
+	ensureTestTopics(t, topic)
 	p, err := NewPublisher(Config{Brokers: brokers, GroupID: "pda-be08-consumer-producer-test", TopicPrefix: "pda"})
 	if err != nil {
 		t.Fatal(err)

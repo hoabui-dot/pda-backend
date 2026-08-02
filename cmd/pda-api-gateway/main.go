@@ -46,6 +46,10 @@ func main() {
 		slog.Error("OIDC adapter is not enabled before production integration")
 		os.Exit(1)
 	}
+	if applicationConfig.Modes.UpstreamWMS != "mock" {
+		slog.Error("upstream WMS adapter is not enabled; provide the approved WMS contract before selecting HTTP mode")
+		os.Exit(1)
+	}
 	store, err := identitymock.LoadDefault()
 	if err != nil {
 		slog.Error("identity fixture rejected", "error", err)
@@ -102,7 +106,7 @@ func main() {
 			slog.Error("Kafka publisher configuration rejected", "error", publishErr)
 			os.Exit(1)
 		}
-		publisher = kafkaPublisher
+		publisher = kafkaadapter.MarkingPublisher{Publisher: kafkaPublisher, Marker: kafkaadapter.NewPostgresStore(pool), Now: time.Now}
 	}
 	cachedTasks := executionredis.New(taskStore, cacheAside, cacheKeys)
 	taskService := executionapp.NewTaskService(cachedTasks, executionpostgres.Idempotency{Store: taskStore}, taskStore, taskStore, publisher, cacheInvalidator, time.Now)

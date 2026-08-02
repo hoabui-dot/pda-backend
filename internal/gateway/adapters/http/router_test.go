@@ -116,6 +116,31 @@ func TestInvalidLoginUnauthorizedAndScopeFailures(t *testing.T) {
 	}
 }
 
+func TestErrorsUseCommonEnvelope(t *testing.T) {
+	handler := setup(t, 10, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	response := request(handler, http.MethodPost, "/api/pda/v1/auth/login", `{"username":"operator","password":"wrong"}`, "", nil)
+	var envelope struct {
+		Data any `json:"data"`
+		Meta struct {
+			CorrelationID string    `json:"correlationId"`
+			ServerTime    time.Time `json:"serverTime"`
+		} `json:"meta"`
+		Errors []struct {
+			Code      string `json:"code"`
+			Retryable bool   `json:"retryable"`
+		} `json:"errors"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &envelope); err != nil {
+		t.Fatal(err)
+	}
+	if response.Code != http.StatusUnauthorized || envelope.Data != nil || len(envelope.Errors) != 1 || envelope.Errors[0].Code != "AUTH_INVALID_CREDENTIALS" {
+		t.Fatalf("unexpected error envelope: %s", response.Body.String())
+	}
+	if envelope.Meta.CorrelationID == "" || envelope.Meta.ServerTime.IsZero() {
+		t.Fatalf("missing error metadata: %s", response.Body.String())
+	}
+}
+
 func TestRefreshRotatesTokenAndLogoutRevokesIt(t *testing.T) {
 	handler := setup(t, 10, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	original := login(t, handler)

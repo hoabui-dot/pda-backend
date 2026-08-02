@@ -24,7 +24,7 @@ type Config struct {
 }
 
 func (c Config) Validate() error {
-	if len(c.Brokers) == 0 {
+	if len(NormalizeBrokers(c.Brokers)) == 0 {
 		return fmt.Errorf("at least one Kafka broker is required")
 	}
 	if strings.TrimSpace(c.GroupID) == "" || strings.TrimSpace(c.TopicPrefix) == "" {
@@ -45,6 +45,7 @@ func NewPublisher(cfg Config) (*Publisher, error) {
 	if cfg.SecurityProtocol == "" {
 		cfg.SecurityProtocol = "PLAINTEXT"
 	}
+	cfg.Brokers = NormalizeBrokers(cfg.Brokers)
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
@@ -68,10 +69,7 @@ func (p *Publisher) Publish(ctx context.Context, envelope event.DomainEventEnvel
 	if err != nil {
 		return err
 	}
-	topic := envelope.Topic
-	if p.Config.TopicPrefix != "" {
-		topic = p.Config.TopicPrefix + "." + topic
-	}
+	topic := ResolveTopic(p.Config.TopicPrefix, envelope.Topic)
 	err = p.writer.WriteMessages(ctx, kafkago.Message{Topic: topic, Key: []byte(envelope.AggregateID), Value: data, Time: envelope.OccurredAt})
 	if p.Metrics != nil {
 		if err != nil {
@@ -81,4 +79,24 @@ func (p *Publisher) Publish(ctx context.Context, envelope event.DomainEventEnvel
 		}
 	}
 	return err
+}
+
+func ResolveTopic(prefix, topic string) string {
+	prefix = strings.Trim(prefix, ".")
+	topic = strings.Trim(topic, ".")
+	if prefix == "" || strings.HasPrefix(topic, prefix+".") {
+		return topic
+	}
+	return prefix + "." + topic
+}
+
+func NormalizeBrokers(brokers []string) []string {
+	normalized := make([]string, 0, len(brokers))
+	for _, broker := range brokers {
+		broker = strings.TrimSpace(broker)
+		if broker != "" {
+			normalized = append(normalized, broker)
+		}
+	}
+	return normalized
 }

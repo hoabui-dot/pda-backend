@@ -21,11 +21,11 @@ than a second PDA-owned broker.
 - Added `config/kafka.env.example` with the host and shared Docker-network broker addresses.
 - Added `make test-kafka` and made it part of `make verify`.
 - Added shared-broker topic provisioning for:
-  - `pda.task.events`
-  - `pda.receiving.events`
-  - `pda.movement.events`
-  - `pda.inventory.events`
-  - `pda.shipping.events`
+  - `pda.task.events.v1`
+  - `pda.receiving.events.v1`
+  - `pda.movement.events.v1`
+  - `pda.inventory.events.v1`
+  - `pda.shipping.events.v1`
   - `pda.dlq`
 - Verified producer delivery with aggregate-ID message keys and consumer-group delivery on the shared broker.
 - Verified duplicate event delivery is suppressed by inbox idempotency.
@@ -45,6 +45,21 @@ than a second PDA-owned broker.
 - Added an outbox worker that claims batches, publishes envelopes, marks successes, and schedules bounded retries on failures.
 - Added the shared deferred verification register at `requirement-report/COMMON-DEFERRED-VERIFICATION.md`.
 - Kept the verified in-memory publisher and explicit mock mode unchanged.
+
+## Phase 8 recheck corrections
+
+The 2026-08-01 recheck found and corrected two Kafka-mode wiring gaps:
+
+- `integration-event-service` no longer fails generic startup when `PDA_MESSAGING_MODE=kafka`; it now starts a PostgreSQL-backed outbox worker and health endpoint in Kafka mode.
+- Kafka topic resolution no longer double-prefixes already-qualified PDA topics such as `pda.task.events.v1`.
+
+Additional recheck evidence:
+
+- `make verify`: **PASS** before an unrelated untracked root prompt file named `GENERATE_PDA_APP_API_INTEGRATION_REQUIREMENTS_PROMPT.md` appeared in the backend worktree.
+- Current full `make verify`: **BLOCKED** only by the repository-boundary architecture scan rejecting that untracked Android prompt file; Kafka tests, contract tests, command builds, and direct build still pass.
+- `go clean -testcache && make test-kafka`: **PASS** against `127.0.0.1:19092`.
+- Kafka-mode `integration-event-service` startup: **PASS**; service stayed running until the test timeout.
+- Outbox worker E2E: inserted one pending `domain_outbox` row, ran `integration-event-service`, verified `published_at IS NOT NULL`, and confirmed the event was present on `pda.task.events.v1`.
 
 ## Local profile exit criteria
 

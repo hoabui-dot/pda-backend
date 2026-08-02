@@ -520,7 +520,19 @@ func writeError(w http.ResponseWriter, err error, correlationID string) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(map[string]any{"code": domainError.Code, "message": domainError.SafeMessage, "details": domainError.Details, "correlationId": correlationID, "retryable": domainError.Retryable})
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"data": nil,
+		"meta": map[string]any{
+			"serverTime":    time.Now().UTC(),
+			"correlationId": correlationID,
+		},
+		"errors": []any{map[string]any{
+			"code":      domainError.Code,
+			"message":   domainError.SafeMessage,
+			"details":   domainError.Details,
+			"retryable": domainError.Retryable,
+		}},
+	})
 }
 
 type rateEntry struct {

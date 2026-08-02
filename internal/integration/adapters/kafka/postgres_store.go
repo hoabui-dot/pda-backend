@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/company/pda-backend/internal/platform/event"
@@ -12,11 +13,24 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-type PostgresStore struct{ pool *pgxpool.Pool }
+type PostgresStore struct {
+	pool          *pgxpool.Pool
+	consumerGroup string
+}
 
 const defaultConsumerGroup = "pda-backend"
 
-func NewPostgresStore(pool *pgxpool.Pool) *PostgresStore { return &PostgresStore{pool: pool} }
+func NewPostgresStore(pool *pgxpool.Pool) *PostgresStore {
+	return NewPostgresStoreWithGroup(pool, defaultConsumerGroup)
+}
+
+func NewPostgresStoreWithGroup(pool *pgxpool.Pool, groupID string) *PostgresStore {
+	groupID = strings.TrimSpace(groupID)
+	if groupID == "" {
+		groupID = defaultConsumerGroup
+	}
+	return &PostgresStore{pool: pool, consumerGroup: groupID}
+}
 
 func (s *PostgresStore) Append(ctx context.Context, record messaging.OutboxRecord) error {
 	b, err := json.Marshal(record.Envelope)
@@ -77,12 +91,12 @@ func (s *PostgresStore) MarkFailed(ctx context.Context, id uuid.UUID, cause erro
 
 func (s *PostgresStore) AlreadyProcessed(ctx context.Context, id uuid.UUID) (bool, error) {
 	var exists bool
-	err := s.pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM event_inbox WHERE event_id=$1 AND consumer_group=$2)`, id, defaultConsumerGroup).Scan(&exists)
+	err := s.pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM event_inbox WHERE event_id=$1 AND consumer_group=$2)`, id, s.consumerGroup).Scan(&exists)
 	return exists, err
 }
 
 func (s *PostgresStore) MarkProcessed(ctx context.Context, id uuid.UUID, at time.Time) error {
-	_, err := s.pool.Exec(ctx, `INSERT INTO event_inbox(event_id,consumer_group,processed_at) VALUES($1,$2,$3) ON CONFLICT(event_id,consumer_group) DO NOTHING`, id, defaultConsumerGroup, at)
+	_, err := s.pool.Exec(ctx, `INSERT INTO event_inbox(event_id,consumer_group,processed_at) VALUES($1,$2,$3) ON CONFLICT(event_id,consumer_group) DO NOTHING`, id, s.consumerGroup, at)
 	return err
 }
 
@@ -91,7 +105,7 @@ func (s *PostgresStore) MoveToDLQ(ctx context.Context, envelope event.DomainEven
 	if err != nil {
 		return err
 	}
-	_, err = s.pool.Exec(ctx, `INSERT INTO event_dlq(event_id,consumer_group,envelope_json,attempts,last_error) VALUES($1,$2,$3,$4,$5) ON CONFLICT(event_id,consumer_group) DO UPDATE SET attempts=EXCLUDED.attempts,last_error=EXCLUDED.last_error,failed_at=now()`, envelope.EventID, defaultConsumerGroup, b, attempts, cause)
+	_, err = s.pool.Exec(ctx, `INSERT INTO event_dlq(event_id,consumer_group,envelope_json,attempts,last_error) VALUES($1,$2,$3,$4,$5) ON CONFLICT(event_id,consumer_group) DO UPDATE SET attempts=EXCLUDED.attempts,last_error=EXCLUDED.last_error,failed_at=now()`, envelope.EventID, s.consumerGroup, b, attempts, cause)
 	return err
 }
 

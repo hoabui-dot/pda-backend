@@ -16,3 +16,21 @@ func TestPublisherFailsClosedWithoutBroker(t *testing.T) {
 		t.Fatal("publisher must fail closed")
 	}
 }
+
+func TestResolveTopicDoesNotDoublePrefixQualifiedTopic(t *testing.T) {
+	if got := ResolveTopic("pda", "pda.task.events.v1"); got != "pda.task.events.v1" {
+		t.Fatalf("qualified topic was rewritten to %q", got)
+	}
+	if got := ResolveTopic("pda", "task.events.v1"); got != "pda.task.events.v1" {
+		t.Fatalf("logical topic resolved to %q", got)
+	}
+}
+
+func TestConfigRejectsOnlyBlankBrokers(t *testing.T) {
+	if err := (Config{Brokers: []string{"", " "}, GroupID: "group", TopicPrefix: "pda"}).Validate(); err == nil {
+		t.Fatal("blank broker list must be rejected")
+	}
+	if got := NormalizeBrokers([]string{" 127.0.0.1:19092 ", ""}); len(got) != 1 || got[0] != "127.0.0.1:19092" {
+		t.Fatalf("unexpected normalized brokers: %#v", got)
+	}
+}
