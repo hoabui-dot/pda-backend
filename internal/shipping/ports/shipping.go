@@ -13,6 +13,7 @@ type Repository interface {
 	Get(context.Context, string) (domain.Shipment, error)
 	GetForUpdate(context.Context, string) (domain.Shipment, error)
 	Save(context.Context, domain.Shipment) error
+	VerifyPackage(context.Context, string, string) error
 	ProjectPickingComplete(context.Context, string) error
 }
 type CommandResult struct {

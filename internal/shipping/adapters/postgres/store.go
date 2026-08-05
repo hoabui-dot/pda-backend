@@ -72,6 +72,22 @@ func (s *Store) Save(c context.Context, x domain.Shipment) error {
 	_, e := s.d(c).Exec(c, "UPDATE shipment SET status=$2,carrier=$3,tracking_number=$4,version=$5,updated_at=$6 WHERE shipment_id=$1", x.ID, x.Status, x.Carrier, x.TrackingNumber, x.Version, x.UpdatedAt)
 	return e
 }
+func (s *Store) VerifyPackage(c context.Context, shipmentID, packageID string) error {
+	tag, e := s.d(c).Exec(c, "UPDATE shipment_package SET status='VERIFIED' WHERE shipment_id=$1 AND package_id=$2 AND status NOT IN ('COMPLETED','VERIFIED')", shipmentID, packageID)
+	if e != nil {
+		return e
+	}
+	if tag.RowsAffected() == 0 {
+		var exists bool
+		if e = s.d(c).QueryRow(c, "SELECT EXISTS(SELECT 1 FROM shipment_package WHERE shipment_id=$1 AND package_id=$2)", shipmentID, packageID).Scan(&exists); e != nil {
+			return e
+		}
+		if !exists {
+			return domain.ErrPackageNotFound
+		}
+	}
+	return nil
+}
 func (s *Store) ProjectPickingComplete(c context.Context, id string) error {
 	_, e := s.d(c).Exec(c, "UPDATE shipment SET picking_complete=true,version=version+1,updated_at=now() WHERE shipment_id=$1", id)
 	return e

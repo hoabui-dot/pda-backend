@@ -32,14 +32,15 @@ func NewConsumer(cfg Config, topic string, store DLQStore, process func(context.
 	if cfg.SecurityProtocol == "" {
 		cfg.SecurityProtocol = "PLAINTEXT"
 	}
-	if cfg.SecurityProtocol != "PLAINTEXT" {
-		return nil, ErrSecurityUnsupported
+	tlsConfig, err := loadTLSConfig(cfg)
+	if err != nil {
+		return nil, err
 	}
 	if topic == "" || store == nil || process == nil {
 		return nil, fmt.Errorf("consumer topic, store, and handler are required")
 	}
 	return &Consumer{
-		reader: kafkago.NewReader(kafkago.ReaderConfig{Brokers: cfg.Brokers, GroupID: cfg.GroupID, Topic: ResolveTopic(cfg.TopicPrefix, topic), MinBytes: 1, MaxBytes: 10 << 20, CommitInterval: 0}),
+		reader: kafkago.NewReader(kafkago.ReaderConfig{Brokers: cfg.Brokers, GroupID: cfg.GroupID, Topic: ResolveTopic(cfg.TopicPrefix, topic), MinBytes: 1, MaxBytes: 10 << 20, CommitInterval: 0, Dialer: &kafkago.Dialer{Timeout: 10 * time.Second, TLS: tlsConfig}}),
 		store:  store, process: process, maxAttempts: 3, Metrics: &messaging.Metrics{},
 	}, nil
 }

@@ -2,9 +2,12 @@ package kafka
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -21,6 +24,10 @@ type Config struct {
 	GroupID          string
 	TopicPrefix      string
 	SecurityProtocol string
+	TLSCAFile        string
+	TLSCertFile      string
+	TLSKeyFile       string
+	TLSServerName    string
 }
 
 func (c Config) Validate() error {
@@ -49,13 +56,48 @@ func NewPublisher(cfg Config) (*Publisher, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
-	if cfg.SecurityProtocol != "PLAINTEXT" {
-		return nil, ErrSecurityUnsupported
+	tlsConfig, err := loadTLSConfig(cfg)
+	if err != nil {
+		return nil, err
 	}
 	return &Publisher{Config: cfg, Metrics: &messaging.Metrics{}, writer: &kafkago.Writer{
 		Addr: kafkago.TCP(cfg.Brokers...), Topic: "", Balancer: &kafkago.Hash{},
 		RequiredAcks: kafkago.RequireAll, MaxAttempts: 3, BatchTimeout: 20 * time.Millisecond,
+		Transport: &kafkago.Transport{TLS: tlsConfig},
 	}}, nil
+}
+
+func loadTLSConfig(cfg Config) (*tls.Config, error) {
+	switch cfg.SecurityProtocol {
+	case "PLAINTEXT":
+		return nil, nil
+	case "TLS":
+		if strings.TrimSpace(cfg.TLSCAFile) == "" {
+			return nil, fmt.Errorf("Kafka TLS requires a CA file")
+		}
+		caPEM, err := os.ReadFile(cfg.TLSCAFile)
+		if err != nil {
+			return nil, fmt.Errorf("read Kafka TLS CA file: %w", err)
+		}
+		roots := x509.NewCertPool()
+		if !roots.AppendCertsFromPEM(caPEM) {
+			return nil, fmt.Errorf("Kafka TLS CA file contains no certificates")
+		}
+		config := &tls.Config{MinVersion: tls.VersionTLS12, RootCAs: roots, ServerName: strings.TrimSpace(cfg.TLSServerName)}
+		if cfg.TLSCertFile != "" || cfg.TLSKeyFile != "" {
+			if cfg.TLSCertFile == "" || cfg.TLSKeyFile == "" {
+				return nil, fmt.Errorf("Kafka TLS client certificate and key must be provided together")
+			}
+			certificate, err := tls.LoadX509KeyPair(cfg.TLSCertFile, cfg.TLSKeyFile)
+			if err != nil {
+				return nil, fmt.Errorf("load Kafka TLS client certificate: %w", err)
+			}
+			config.Certificates = []tls.Certificate{certificate}
+		}
+		return config, nil
+	default:
+		return nil, ErrSecurityUnsupported
+	}
 }
 
 func (p *Publisher) Publish(ctx context.Context, envelope event.DomainEventEnvelope) error {

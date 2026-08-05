@@ -18,9 +18,9 @@ make verify
 docker compose -f docker/compose.yml config
 ```
 
-Compose maps PostgreSQL to host port `15432` and Redis to `16379` by default. Override them with `PDA_POSTGRES_PORT` and `PDA_REDIS_PORT`.
+Compose maps the PDA gateway to host port `8080`, PostgreSQL to `15432`, and Redis to `16379` by default. Override them with `PDA_GATEWAY_PORT`, `PDA_POSTGRES_PORT`, and `PDA_REDIS_PORT`.
 
-Run a service with `go run ./cmd/pda-api-gateway`. Each service exposes `/healthz`, `/livez`, and `/readyz`. Runtime defaults are explicitly mock for messaging, upstream WMS, and authentication.
+Run a service with `go run ./cmd/pda-api-gateway`. Each service exposes `/healthz`, `/livez`, and `/readyz`. The gateway defaults to backend-owned PostgreSQL authentication; messaging and upstream WMS remain explicit mock modes for local workflow development until their external contracts are verified.
 
 Schema changes use the pinned `migrate/migrate:v4.18.3` image through `make migrate-up` and `make migrate-down`. The gateway uses `PDA_DATABASE_URL`, defaulting to local Compose PostgreSQL, plus `PDA_REDIS_URL` (default `redis://localhost:16379/0`) and `PDA_CACHE_TTL` (default `30s`). Redis failures degrade reads to PostgreSQL and never replace database command/idempotency truth.
 

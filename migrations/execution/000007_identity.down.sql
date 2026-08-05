@@ -1,0 +1,12 @@
+DROP TABLE IF EXISTS identity_security_audit;
+DROP TABLE IF EXISTS identity_refresh_tokens;
+DROP TABLE IF EXISTS identity_sessions;
+DROP TABLE IF EXISTS identity_operator_devices;
+DROP TABLE IF EXISTS identity_devices;
+DROP TABLE IF EXISTS identity_operator_warehouses;
+DROP TABLE IF EXISTS identity_warehouses;
+DROP TABLE IF EXISTS identity_role_permissions;
+DROP TABLE IF EXISTS identity_operator_roles;
+DROP TABLE IF EXISTS identity_permissions;
+DROP TABLE IF EXISTS identity_roles;
+DROP TABLE IF EXISTS identity_operators;

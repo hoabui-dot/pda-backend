@@ -1,1 +1,1 @@
-{"fixtureVersion":1,"operators":[{"id":"OP-01","username":"operator","displayName":"Demo Operator","password":"demo-password","roles":["RECEIVING_OPERATOR"],"warehouseIds":["WH-01"]}],"warehouses":[{"id":"WH-01","name":"Demo Warehouse"}]}
+{"fixtureVersion":1,"operators":[{"id":"OP-01","employeeCode":"EMP-0001","username":"operator","displayName":"Demo Operator","password":"demo-password","roles":["RECEIVING_OPERATOR"],"permissions":["RECEIVE"],"warehouseIds":["WH-01"],"shiftCode":"DAY","active":true}],"warehouses":[{"id":"WH-01","name":"Demo Warehouse"}]}

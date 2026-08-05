@@ -38,7 +38,9 @@ type ConfirmCommand struct {
 	Command
 	LineID, Barcode string
 	Quantity        int64
+	Condition       string
 	Remark          *string
+	ScannedAt       *time.Time
 }
 
 func (s *Service) List(ctx context.Context, f ports.Filter, actor platform.ActorContext) (ports.Page, error) {
@@ -97,7 +99,7 @@ func (s *Service) Confirm(ctx context.Context, c ConfirmCommand) (domain.Task, e
 				before = line.ReceivedQuantity
 			}
 		}
-		line, err := t.Confirm(c.Actor.OperatorID, c.LineID, c.Barcode, c.Quantity, c.Remark, c.BaseVersion, s.now())
+		line, err := t.ConfirmWithCondition(c.Actor.OperatorID, c.LineID, c.Barcode, c.Quantity, c.Condition, c.Remark, c.BaseVersion, s.now())
 		if err != nil {
 			return "", 0, err
 		}
@@ -173,9 +175,8 @@ func (s *Service) mutate(ctx context.Context, c Command, eventType, commandType 
 		return domain.Task{}, err
 	}
 	if mutated {
-		if err := s.invalidator.InvalidateReceivingViews(ctx, c.Actor.WarehouseID, c.Actor.OperatorID); err != nil {
-			return domain.Task{}, err
-		}
+		// The transaction is committed above; cache invalidation is best effort.
+		_ = s.invalidator.InvalidateReceivingViews(ctx, c.Actor.WarehouseID, c.Actor.OperatorID)
 		if err := s.publisher.Publish(ctx, envelope); err != nil {
 			return result, &platform.DomainError{Code: "MESSAGING_PUBLISH_PENDING", SafeMessage: "Receiving committed; event publication pending", Retryable: true}
 		}

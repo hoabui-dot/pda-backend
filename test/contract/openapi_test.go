@@ -16,9 +16,14 @@ func TestOpenAPIContainsOperationalEndpoints(t *testing.T) {
 			t.Fatalf("missing %s", endpoint)
 		}
 	}
-	for _, contract := range []string{"bearerAuth", "X-Correlation-Id", "X-Device-Id", "X-Warehouse-Id", "Idempotency-Key", "If-Match"} {
+	for _, contract := range []string{"bearerAuth", "X-Correlation-Id", "X-Device-Id", "X-Warehouse-Id", "X-Operator-Id", "Accept-Language", "Idempotency-Key", "If-Match"} {
 		if !strings.Contains(string(content), contract) {
 			t.Fatalf("missing contract %s", contract)
+		}
+	}
+	for _, schema := range []string{"Envelope:", "Meta:", "APIError:", "ConflictDetails:", "CommandStatus:", "nextCursor:", "hasMore:", "asOf:", "stale:"} {
+		if !strings.Contains(string(content), schema) {
+			t.Fatalf("missing common schema field %s", schema)
 		}
 	}
 	for _, endpoint := range []string{"/inventory/search", "/inventory/balances", "/inventory/movements", "/inventory/transfers/source-validations", "/inventory/transfers/destination-validations", "/inventory/transfers/item-resolutions", "/inventory/transfers", "/cycle-count/tasks", "/cycle-count/tasks/{taskId}/counts", "/cycle-count/tasks/{taskId}/recounts", "/cycle-count/tasks/{taskId}/completion"} {

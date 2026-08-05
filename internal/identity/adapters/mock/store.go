@@ -23,11 +23,15 @@ type fixture struct {
 
 type operatorFixture struct {
 	ID           string   `json:"id"`
+	EmployeeCode string   `json:"employeeCode"`
 	Username     string   `json:"username"`
 	DisplayName  string   `json:"displayName"`
 	Password     string   `json:"password"`
 	Roles        []string `json:"roles"`
+	Permissions  []string `json:"permissions"`
 	WarehouseIDs []string `json:"warehouseIds"`
+	ShiftCode    string   `json:"shiftCode"`
+	Active       bool     `json:"active"`
 }
 
 type Store struct {
@@ -53,7 +57,7 @@ func Load(filesystem fs.FS, path string) (*Store, error) {
 	}
 	store := &Store{operators: map[string]identity.Operator{}, byID: map[string]identity.Operator{}, warehouses: map[string]identity.Warehouse{}, devices: map[string]identity.DeviceRegistration{}}
 	for _, record := range loaded.Operators {
-		operator := identity.Operator{ID: record.ID, Username: record.Username, DisplayName: record.DisplayName, Password: record.Password, Roles: record.Roles, WarehouseIDs: record.WarehouseIDs}
+		operator := identity.Operator{ID: record.ID, EmployeeCode: record.EmployeeCode, Username: record.Username, DisplayName: record.DisplayName, Password: record.Password, Roles: record.Roles, Permissions: record.Permissions, WarehouseIDs: record.WarehouseIDs, ShiftCode: record.ShiftCode, Active: record.Active}
 		store.operators[operator.Username] = operator
 		store.byID[operator.ID] = operator
 	}

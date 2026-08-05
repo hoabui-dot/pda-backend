@@ -40,13 +40,28 @@ type TransferCommand struct {
 }
 
 func (s *Service) Search(c context.Context, q string, a platform.ActorContext) ([]domain.Balance, error) {
-	return s.repo.Search(c, a.WarehouseID, q)
+	values, err := s.repo.Search(c, a.WarehouseID, q)
+	return normalizeBalances(values), err
 }
 func (s *Service) Balances(c context.Context, item, loc string, a platform.ActorContext) ([]domain.Balance, error) {
-	return s.repo.Balances(c, a.WarehouseID, item, loc)
+	values, err := s.repo.Balances(c, a.WarehouseID, item, loc)
+	return normalizeBalances(values), err
 }
 func (s *Service) Movements(c context.Context, item, cursor string, a platform.ActorContext) ([]domain.Movement, error) {
 	return s.repo.Movements(c, a.WarehouseID, item, cursor)
+}
+
+func normalizeBalances(values []domain.Balance) []domain.Balance {
+	for i := range values {
+		values[i].ItemCode = values[i].ItemID
+		values[i].LocationCode = values[i].LocationID
+		values[i].OnHand = values[i].Quantity
+		values[i].Available = values[i].Quantity - values[i].Reserved
+		if values[i].UOM == "" {
+			values[i].UOM = "EA"
+		}
+	}
+	return values
 }
 func (s *Service) ValidateTransfer(c context.Context, x TransferCommand) error {
 	return s.repo.ValidateLocations(c, x.Actor.WarehouseID, x.Source, x.Destination, x.Item, x.Quantity)
@@ -69,10 +84,13 @@ func (s *Service) Transfer(c context.Context, x TransferCommand) (domain.Transfe
 		if e = s.repo.ValidateLocations(tx, x.Actor.WarehouseID, x.Source, x.Destination, x.Item, x.Quantity); e != nil {
 			return e
 		}
-		result = domain.Transfer{CommandID: x.ID.String(), WarehouseID: x.Actor.WarehouseID, SourceLocation: x.Source, DestinationLocation: x.Destination, ItemID: x.Item, Quantity: x.Quantity, Status: "COMPLETED", AsOf: s.now().UTC()}
+		beforeSource, beforeDestination := s.balanceSnapshot(tx, x.Actor.WarehouseID, x.Item, x.Source), s.balanceSnapshot(tx, x.Actor.WarehouseID, x.Item, x.Destination)
+		result = domain.Transfer{CommandID: x.ID.String(), TransferID: x.ID.String(), WarehouseID: x.Actor.WarehouseID, SourceLocation: x.Source, DestinationLocation: x.Destination, ItemID: x.Item, Quantity: x.Quantity, Status: "COMPLETED", BeforeSource: beforeSource, BeforeDestination: beforeDestination, AuditID: x.ID.String(), AsOf: s.now().UTC()}
 		if e = s.repo.Transfer(tx, result); e != nil {
 			return e
 		}
+		result.AfterSource = s.balanceSnapshot(tx, x.Actor.WarehouseID, x.Item, x.Source)
+		result.AfterDestination = s.balanceSnapshot(tx, x.Actor.WarehouseID, x.Item, x.Destination)
 		payload, _ := json.Marshal(result)
 		env = makeEvent("StockTransferConfirmed", "StockTransfer", x.ID.String(), 1, x.Actor, x.ID, payload, s.now)
 		if e = env.Validate(); e != nil {
@@ -102,6 +120,29 @@ func (s *Service) Transfer(c context.Context, x TransferCommand) (domain.Transfe
 	}
 	return result, nil
 }
+
+func (s *Service) balanceSnapshot(ctx context.Context, warehouse, item, location string) *domain.Balance {
+	values, err := s.repo.Balances(ctx, warehouse, item, location)
+	if err != nil || len(values) == 0 {
+		return nil
+	}
+	values = normalizeBalances(values)
+	return &values[0]
+}
+
+func (s *Service) CommandStatus(c context.Context, id uuid.UUID, a platform.ActorContext) (ports.CommandResult, error) {
+	result, found, err := s.commands.Find(c, id.String())
+	if err != nil {
+		return ports.CommandResult{}, err
+	}
+	if !found {
+		return ports.CommandResult{}, domain.ErrNotFound
+	}
+	if result.WarehouseID != a.WarehouseID || result.OperatorID != a.OperatorID {
+		return ports.CommandResult{}, &platform.DomainError{Code: "WAREHOUSE_ACCESS_DENIED", SafeMessage: "Command access denied"}
+	}
+	return result, nil
+}
 func (s *Service) ListCounts(c context.Context, a platform.ActorContext) ([]domain.CountTask, error) {
 	return s.repo.ListCounts(c, a.WarehouseID, a.OperatorID)
 }
@@ -115,6 +156,28 @@ func (s *Service) CountDetail(c context.Context, id string, a platform.ActorCont
 	}
 	return t, nil
 }
+func (s *Service) ValidateCountLocation(c context.Context, id, location string, a platform.ActorContext) error {
+	task, err := s.CountDetail(c, id, a)
+	if err != nil {
+		return err
+	}
+	if task.LocationID != location {
+		return domain.ErrLocationInvalid
+	}
+	return nil
+}
+func (s *Service) ValidateCountItem(c context.Context, id, lineID, item string, a platform.ActorContext) error {
+	task, err := s.CountDetail(c, id, a)
+	if err != nil {
+		return err
+	}
+	for _, line := range task.Lines {
+		if line.ID == lineID && line.ItemID == item {
+			return nil
+		}
+	}
+	return domain.ErrItemNotInDocument
+}
 func (s *Service) SubmitCount(c context.Context, id, line string, q int64, x Command) (domain.CountTask, error) {
 	return s.countMutation(c, id, x, "CycleCountSubmitted", func(t *domain.CountTask) error { return t.Submit(x.Actor.OperatorID, line, q, x.BaseVersion, s.now()) })
 }
@@ -123,6 +186,19 @@ func (s *Service) Recount(c context.Context, id, line string, x Command) (domain
 }
 func (s *Service) CompleteCount(c context.Context, id string, x Command) (domain.CountTask, error) {
 	return s.countMutation(c, id, x, "CycleCountCompleted", func(t *domain.CountTask) error { return t.Complete(x.Actor.OperatorID, x.BaseVersion, s.now()) })
+}
+func (s *Service) CountCommandStatus(c context.Context, id uuid.UUID, a platform.ActorContext) (ports.CommandResult, error) {
+	result, found, err := s.commands.Find(c, id.String())
+	if err != nil {
+		return ports.CommandResult{}, err
+	}
+	if !found {
+		return ports.CommandResult{}, domain.ErrNotFound
+	}
+	if result.WarehouseID != a.WarehouseID || result.OperatorID != a.OperatorID {
+		return ports.CommandResult{}, &platform.DomainError{Code: "WAREHOUSE_ACCESS_DENIED", SafeMessage: "Command access denied"}
+	}
+	return result, nil
 }
 func (s *Service) countMutation(c context.Context, id string, x Command, eventType string, f func(*domain.CountTask) error) (domain.CountTask, error) {
 	var result domain.CountTask

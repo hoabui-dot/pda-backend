@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 )
 
 func TestWarehousesMapsApprovedWMSResponse(t *testing.T) {
@@ -30,6 +31,16 @@ func TestWarehousesMapsApprovedWMSResponse(t *testing.T) {
 	}
 	if len(warehouses) != 1 || warehouses[0].ID != "wh-1" || warehouses[0].Name != "Kho 1" {
 		t.Fatalf("unexpected mapped warehouses: %+v", warehouses)
+	}
+}
+
+func TestNewAppliesDefaultTimeout(t *testing.T) {
+	client, err := New("https://wms.example.test", "token", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if client.http.Timeout != 10*time.Second {
+		t.Fatalf("timeout=%s", client.http.Timeout)
 	}
 }
 

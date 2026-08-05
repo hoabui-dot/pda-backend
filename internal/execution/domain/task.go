@@ -39,9 +39,15 @@ type Task struct {
 	Category    TaskCategory `json:"category"`
 	Status      TaskStatus   `json:"status"`
 	Priority    int          `json:"priority"`
+	Title       string       `json:"title"`
+	LineCount   int          `json:"lineCount"`
+	PieceCount  int64        `json:"pieceCount"`
+	DueAt       *time.Time   `json:"dueAt"`
 	WarehouseID string       `json:"warehouseId"`
 	OperatorID  *string      `json:"operatorId"`
+	LockState   string       `json:"lockState"`
 	Version     int64        `json:"version"`
+	CreatedAt   time.Time    `json:"createdAt"`
 	UpdatedAt   time.Time    `json:"updatedAt"`
 }
 

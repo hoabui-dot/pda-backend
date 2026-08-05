@@ -34,6 +34,20 @@ type TaskCommand struct {
 	Actor                  platform.ActorContext
 }
 
+func (s *TaskService) CommandStatus(ctx context.Context, id uuid.UUID, actor platform.ActorContext) (ports.IdempotencyResult, error) {
+	result, found, err := s.idempotency.Find(ctx, id.String())
+	if err != nil {
+		return ports.IdempotencyResult{}, err
+	}
+	if !found {
+		return ports.IdempotencyResult{}, domain.ErrTaskNotFound
+	}
+	if result.Task.WarehouseID != actor.WarehouseID || result.Task.OperatorID == nil || *result.Task.OperatorID != actor.OperatorID {
+		return ports.IdempotencyResult{}, &platform.DomainError{Code: "WAREHOUSE_ACCESS_DENIED", SafeMessage: "Command access denied"}
+	}
+	return result, nil
+}
+
 func (s *TaskService) List(ctx context.Context, filter ports.TaskFilter, actor platform.ActorContext) (ports.TaskPage, error) {
 	if filter.WarehouseID != actor.WarehouseID {
 		return ports.TaskPage{}, &platform.DomainError{Code: "WAREHOUSE_ACCESS_DENIED", SafeMessage: "Warehouse access denied"}
@@ -43,6 +57,16 @@ func (s *TaskService) List(ctx context.Context, filter ports.TaskFilter, actor p
 		filter.Limit = 20
 	}
 	return s.tasks.List(ctx, filter)
+}
+func (s *TaskService) Detail(ctx context.Context, id string, actor platform.ActorContext) (domain.Task, error) {
+	task, err := s.tasks.GetForUpdate(ctx, id)
+	if err != nil {
+		return domain.Task{}, err
+	}
+	if task.WarehouseID != actor.WarehouseID || (task.OperatorID != nil && *task.OperatorID != actor.OperatorID) {
+		return domain.Task{}, domain.ErrTaskNotFound
+	}
+	return task, nil
 }
 func (s *TaskService) Summary(ctx context.Context, warehouseID, status string, actor platform.ActorContext) ([]ports.SummaryItem, error) {
 	if warehouseID != actor.WarehouseID {
@@ -110,9 +134,8 @@ func (s *TaskService) mutate(ctx context.Context, command TaskCommand, eventType
 		return domain.Task{}, err
 	}
 	if mutated {
-		if err := s.invalidator.InvalidateTaskViews(ctx, command.Actor.WarehouseID, command.Actor.OperatorID); err != nil {
-			return domain.Task{}, err
-		}
+		// The transaction is committed above; cache invalidation is best effort.
+		_ = s.invalidator.InvalidateTaskViews(ctx, command.Actor.WarehouseID, command.Actor.OperatorID)
 	}
 	if mutated && result.Event.EventID != uuid.Nil {
 		if err := s.publisher.Publish(ctx, result.Event); err != nil {

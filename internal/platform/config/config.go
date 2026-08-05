@@ -23,9 +23,27 @@ type Config struct {
 	KafkaGroupID          string
 	KafkaTopicPrefix      string
 	KafkaSecurityProtocol string
+	KafkaTLSCAFile        string
+	KafkaTLSCertFile      string
+	KafkaTLSKeyFile       string
+	KafkaTLSServerName    string
+	TokenSecret           string
+	TokenIssuer           string
+	TokenAudience         string
+	AccessTokenTTL        string
+	RefreshTokenTTL       string
+	TokenSigningMode      string
+	TokenPrivateKeyFile   string
+	TokenPublicKeyFiles   string
+	TokenKeyID            string
 	UpstreamWMSBaseURL    string
 	UpstreamWMSToken      string
-	Modes                 Modes
+	// WMSTaskTopics are the absolute cross-system topics carrying warehouse task
+	// dispatch from WMS. They are never prefixed with the pda topic prefix
+	// because they are owned by another system.
+	WMSTaskTopics  string
+	WMSTaskGroupID string
+	Modes          Modes
 }
 
 func Load() (Config, error) {
@@ -38,12 +56,27 @@ func Load() (Config, error) {
 		KafkaGroupID:          valueOrDefault("PDA_KAFKA_GROUP_ID", "pda-backend"),
 		KafkaTopicPrefix:      valueOrDefault("PDA_KAFKA_TOPIC_PREFIX", "pda"),
 		KafkaSecurityProtocol: valueOrDefault("PDA_KAFKA_SECURITY_PROTOCOL", "PLAINTEXT"),
+		KafkaTLSCAFile:        valueOrDefault("PDA_KAFKA_TLS_CA_FILE", ""),
+		KafkaTLSCertFile:      valueOrDefault("PDA_KAFKA_TLS_CERT_FILE", ""),
+		KafkaTLSKeyFile:       valueOrDefault("PDA_KAFKA_TLS_KEY_FILE", ""),
+		KafkaTLSServerName:    valueOrDefault("PDA_KAFKA_TLS_SERVER_NAME", ""),
+		TokenSecret:           valueOrDefault("PDA_TOKEN_SECRET", ""),
+		TokenIssuer:           valueOrDefault("PDA_TOKEN_ISSUER", "pda-backend"),
+		TokenAudience:         valueOrDefault("PDA_TOKEN_AUDIENCE", "pda-app"),
+		AccessTokenTTL:        valueOrDefault("PDA_ACCESS_TOKEN_TTL", "15m"),
+		RefreshTokenTTL:       valueOrDefault("PDA_REFRESH_TOKEN_TTL", "168h"),
+		TokenSigningMode:      valueOrDefault("PDA_TOKEN_SIGNING_MODE", "HS256"),
+		TokenPrivateKeyFile:   valueOrDefault("PDA_TOKEN_PRIVATE_KEY_FILE", ""),
+		TokenPublicKeyFiles:   valueOrDefault("PDA_TOKEN_PUBLIC_KEY_FILES", ""),
+		TokenKeyID:            valueOrDefault("PDA_TOKEN_KEY_ID", "local"),
 		UpstreamWMSBaseURL:    valueOrDefault("PDA_UPSTREAM_WMS_BASE_URL", ""),
 		UpstreamWMSToken:      valueOrDefault("PDA_UPSTREAM_WMS_TOKEN", ""),
+		WMSTaskTopics:         valueOrDefault("PDA_WMS_TASK_TOPICS", "WMS.PDA.WarehouseTaskCreated.v1,WMS.PDA.WarehouseTaskUpdated.v1,WMS.PDA.WarehouseTaskCancelled.v1"),
+		WMSTaskGroupID:        valueOrDefault("PDA_WMS_TASK_GROUP_ID", "pda-backend-wms-tasks-v1"),
 		Modes: Modes{
 			Messaging:   valueOrDefault("PDA_MESSAGING_MODE", "mock"),
 			UpstreamWMS: valueOrDefault("PDA_UPSTREAM_WMS_MODE", "mock"),
-			Auth:        valueOrDefault("PDA_AUTH_MODE", "mock"),
+			Auth:        valueOrDefault("PDA_AUTH_MODE", "internal"),
 		},
 	}
 	if err := config.Validate(); err != nil {
@@ -65,8 +98,25 @@ func (c Config) Validate() error {
 	if !oneOf(c.Modes.UpstreamWMS, "mock", "http") {
 		return fmt.Errorf("invalid upstream WMS mode %q", c.Modes.UpstreamWMS)
 	}
-	if !oneOf(c.Modes.Auth, "mock", "oidc") {
+	if !oneOf(c.Modes.Auth, "mock", "oidc", "internal") {
 		return fmt.Errorf("invalid auth mode %q", c.Modes.Auth)
+	}
+	if c.Modes.Auth == "internal" {
+		if len(c.TokenSecret) < 32 || strings.TrimSpace(c.TokenIssuer) == "" || strings.TrimSpace(c.TokenAudience) == "" {
+			return fmt.Errorf("internal auth requires token secret, issuer, and audience")
+		}
+		if ttl, err := time.ParseDuration(c.AccessTokenTTL); err != nil || ttl <= 0 {
+			return fmt.Errorf("invalid access token TTL")
+		}
+		if ttl, err := time.ParseDuration(c.RefreshTokenTTL); err != nil || ttl <= 0 {
+			return fmt.Errorf("invalid refresh token TTL")
+		}
+		if !oneOf(c.TokenSigningMode, "HS256", "RS256") {
+			return fmt.Errorf("invalid token signing mode %q", c.TokenSigningMode)
+		}
+		if c.TokenSigningMode == "RS256" && (strings.TrimSpace(c.TokenPrivateKeyFile) == "" || strings.TrimSpace(c.TokenPublicKeyFiles) == "" || strings.TrimSpace(c.TokenKeyID) == "") {
+			return fmt.Errorf("RS256 requires private key, public key set, and key ID")
+		}
 	}
 	if c.Modes.UpstreamWMS == "http" {
 		parsed, err := url.Parse(strings.TrimSpace(c.UpstreamWMSBaseURL))

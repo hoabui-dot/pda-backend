@@ -23,6 +23,9 @@ func (s *Store) GetForUpdate(c context.Context, id string) (domain.Shipment, err
 	return s.next.GetForUpdate(c, id)
 }
 func (s *Store) Save(c context.Context, x domain.Shipment) error { return s.next.Save(c, x) }
+func (s *Store) VerifyPackage(c context.Context, shipmentID, packageID string) error {
+	return s.next.VerifyPackage(c, shipmentID, packageID)
+}
 func (s *Store) ProjectPickingComplete(c context.Context, id string) error {
 	e := s.next.ProjectPickingComplete(c, id)
 	if e == nil {

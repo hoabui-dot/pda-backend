@@ -30,7 +30,14 @@ type ConfirmCommand struct {
 	ID                                 uuid.UUID
 	Key, ShipmentID, Carrier, Tracking string
 	BaseVersion                        int64
+	VerifiedPackageIDs                 []string
 	Actor                              platform.ActorContext
+}
+
+type PackageVerifyCommand struct {
+	ShipmentID, PackageID, Barcode string
+	BaseVersion                    int64
+	Actor                          platform.ActorContext
 }
 
 func (s *Service) Summary(c context.Context, id string, a platform.ActorContext) (domain.Shipment, error) {
@@ -66,6 +73,58 @@ func (s *Service) CommandStatus(c context.Context, id uuid.UUID, a platform.Acto
 	}
 	return x, nil
 }
+func (s *Service) VerifyPackage(c context.Context, x PackageVerifyCommand) (domain.Shipment, error) {
+	var result domain.Shipment
+	var envelope event.DomainEventEnvelope
+	changed := false
+	err := s.tx.WithinTransaction(c, func(tx context.Context) error {
+		shipment, err := s.repo.GetForUpdate(tx, x.ShipmentID)
+		if err != nil {
+			return err
+		}
+		if shipment.WarehouseID != x.Actor.WarehouseID {
+			return &platform.DomainError{Code: "WAREHOUSE_ACCESS_DENIED", SafeMessage: "Shipment access denied"}
+		}
+		before := shipment.Version
+		if err = shipment.VerifyPackage(x.PackageID, x.Barcode, x.BaseVersion, s.now()); err != nil {
+			return err
+		}
+		if shipment.Version == before {
+			result = shipment
+			return nil
+		}
+		if err = s.repo.Save(tx, shipment); err != nil {
+			return err
+		}
+		if err = s.repo.VerifyPackage(tx, shipment.ID, x.PackageID); err != nil {
+			return err
+		}
+		payload, _ := json.Marshal(shipment)
+		envelope = event.DomainEventEnvelope{EventID: uuid.New(), EventType: "ShipmentPackageVerified", EventVersion: 1, AggregateType: "Shipment", AggregateID: shipment.ID, AggregateVersion: shipment.Version, OccurredAt: s.now().UTC(), CorrelationID: x.Actor.CorrelationID, CausationID: uuid.New(), WarehouseID: x.Actor.WarehouseID, OperatorID: x.Actor.OperatorID, DeviceID: x.Actor.DeviceID, Topic: "pda.shipping.events.v1", Payload: payload}
+		if err = envelope.Validate(); err != nil {
+			return err
+		}
+		if err = s.outbox.Append(tx, envelope); err != nil {
+			return err
+		}
+		if err = s.audit.AppendShippingAudit(tx, "ShipmentPackageVerified", shipment, x.Actor, payload); err != nil {
+			return err
+		}
+		result = shipment
+		changed = true
+		return nil
+	})
+	if err != nil {
+		return domain.Shipment{}, err
+	}
+	if changed {
+		_ = s.invalidator.InvalidateShippingViews(c, x.Actor.WarehouseID, x.Actor.OperatorID)
+		if err = s.publisher.Publish(c, envelope); err != nil {
+			return result, &platform.DomainError{Code: "MESSAGING_PUBLISH_PENDING", SafeMessage: "Package verification committed; publication pending", Retryable: true}
+		}
+	}
+	return result, nil
+}
 func (s *Service) Confirm(c context.Context, x ConfirmCommand) (domain.Shipment, error) {
 	var result domain.Shipment
 	var events []event.DomainEventEnvelope
@@ -88,7 +147,7 @@ func (s *Service) Confirm(c context.Context, x ConfirmCommand) (domain.Shipment,
 		if sh.WarehouseID != x.Actor.WarehouseID {
 			return &platform.DomainError{Code: "WAREHOUSE_ACCESS_DENIED", SafeMessage: "Shipment access denied"}
 		}
-		if e = sh.Confirm(x.Carrier, x.Tracking, x.BaseVersion, s.now()); e != nil {
+		if e = sh.ConfirmWithPackages(x.Carrier, x.Tracking, x.VerifiedPackageIDs, x.BaseVersion, s.now()); e != nil {
 			return e
 		}
 		if e = s.repo.Save(tx, sh); e != nil {

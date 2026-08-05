@@ -1,6 +1,9 @@
 package cache
 
-import "context"
+import (
+	"context"
+	"errors"
+)
 
 type Invalidator struct {
 	Cache *Aside
@@ -11,10 +14,16 @@ func (i Invalidator) clear(c context.Context, w, o string) error {
 	if o == "" {
 		o = "*"
 	}
+	var result error
 	for _, p := range []string{i.Keys.Key("dashboard", w, o), i.Keys.Key("task-summary", w, o) + "*", i.Keys.Key("inventory-search", w) + "*", i.Keys.Key("inventory-balance", w) + "*", i.Keys.Key("shipment") + "*"} {
-		_ = i.Cache.DeletePattern(c, p)
+		if err := i.Cache.DeletePattern(c, p); err != nil {
+			i.Cache.metrics.InvalidationFailure.Add(1)
+			result = errors.Join(result, err)
+			continue
+		}
+		i.Cache.metrics.InvalidationSuccess.Add(1)
 	}
-	return nil
+	return result
 }
 func (i Invalidator) InvalidateTaskViews(c context.Context, w, o string) error {
 	return i.clear(c, w, o)

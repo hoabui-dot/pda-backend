@@ -8,13 +8,15 @@ import (
 )
 
 var (
-	ErrNotFound  = &platform.DomainError{Code: "SHIPMENT_NOT_FOUND", SafeMessage: "Shipment not found"}
-	ErrNotReady  = &platform.DomainError{Code: "SHIPMENT_NOT_READY", SafeMessage: "Shipment prerequisites are incomplete"}
-	ErrPackage   = &platform.DomainError{Code: "PACKAGE_INCOMPLETE", SafeMessage: "Every package must be complete"}
-	ErrCarrier   = &platform.DomainError{Code: "CARRIER_INVALID", SafeMessage: "Carrier is invalid"}
-	ErrTracking  = &platform.DomainError{Code: "TRACKING_INVALID", SafeMessage: "Tracking number is invalid"}
-	ErrVersion   = &platform.DomainError{Code: "SHIPMENT_VERSION_CONFLICT", SafeMessage: "Shipment version has changed"}
-	ErrConfirmed = &platform.DomainError{Code: "SHIPMENT_ALREADY_CONFIRMED", SafeMessage: "Shipment is already confirmed"}
+	ErrNotFound        = &platform.DomainError{Code: "SHIPMENT_NOT_FOUND", SafeMessage: "Shipment not found"}
+	ErrNotReady        = &platform.DomainError{Code: "SHIPMENT_NOT_READY", SafeMessage: "Shipment prerequisites are incomplete"}
+	ErrPackage         = &platform.DomainError{Code: "PACKAGE_INCOMPLETE", SafeMessage: "Every package must be complete"}
+	ErrCarrier         = &platform.DomainError{Code: "CARRIER_INVALID", SafeMessage: "Carrier is invalid"}
+	ErrTracking        = &platform.DomainError{Code: "TRACKING_INVALID", SafeMessage: "Tracking number is invalid"}
+	ErrVersion         = &platform.DomainError{Code: "SHIPMENT_VERSION_CONFLICT", SafeMessage: "Shipment version has changed"}
+	ErrConfirmed       = &platform.DomainError{Code: "SHIPMENT_ALREADY_CONFIRMED", SafeMessage: "Shipment is already confirmed"}
+	ErrPackageNotFound = &platform.DomainError{Code: "BARCODE_UNKNOWN", SafeMessage: "Package is unknown"}
+	ErrPackageContext  = &platform.DomainError{Code: "BARCODE_WRONG_CONTEXT", SafeMessage: "Package does not belong to this shipment"}
 )
 
 type Package struct {
@@ -48,7 +50,7 @@ func (s Shipment) Readiness() Readiness {
 		r.BlockingReasons = append(r.BlockingReasons, "PICKING_INCOMPLETE")
 	}
 	for _, p := range s.Packages {
-		if p.Status != "COMPLETED" {
+		if p.Status != "COMPLETED" && p.Status != "VERIFIED" {
 			r.PackagesComplete = false
 			break
 		}
@@ -59,7 +61,33 @@ func (s Shipment) Readiness() Readiness {
 	r.Ready = r.PickingComplete && r.PackagesComplete && len(s.Packages) > 0
 	return r
 }
+
+func (s *Shipment) VerifyPackage(packageID, barcode string, base int64, now time.Time) error {
+	if s.Version != base {
+		return ErrVersion
+	}
+	for i := range s.Packages {
+		if s.Packages[i].ID != packageID {
+			continue
+		}
+		if barcode != "" && barcode != packageID {
+			return ErrPackageContext
+		}
+		if s.Packages[i].Status == "COMPLETED" || s.Packages[i].Status == "VERIFIED" {
+			return nil
+		}
+		s.Packages[i].Status = "VERIFIED"
+		s.Version++
+		s.UpdatedAt = now.UTC()
+		return nil
+	}
+	return ErrPackageNotFound
+}
 func (s *Shipment) Confirm(carrier, tracking string, base int64, now time.Time) error {
+	return s.ConfirmWithPackages(carrier, tracking, nil, base, now)
+}
+
+func (s *Shipment) ConfirmWithPackages(carrier, tracking string, verifiedPackageIDs []string, base int64, now time.Time) error {
 	if s.Version != base {
 		return ErrVersion
 	}
@@ -72,6 +100,17 @@ func (s *Shipment) Confirm(carrier, tracking string, base int64, now time.Time) 
 	}
 	if !r.PackagesComplete || len(s.Packages) == 0 {
 		return ErrPackage
+	}
+	if len(verifiedPackageIDs) > 0 {
+		verified := map[string]bool{}
+		for _, id := range verifiedPackageIDs {
+			verified[id] = true
+		}
+		for _, p := range s.Packages {
+			if !verified[p.ID] {
+				return ErrPackage
+			}
+		}
 	}
 	allowed := map[string]bool{"DHL": true, "FEDEX": true, "UPS": true, "VNPOST": true}
 	carrier = strings.ToUpper(strings.TrimSpace(carrier))

@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/company/pda-backend/internal/execution/domain"
 	"github.com/company/pda-backend/internal/execution/ports"
@@ -92,6 +93,12 @@ func (s *Store) List(_ context.Context, f ports.TaskFilter) (ports.TaskPage, err
 		if f.Query != "" && !strings.Contains(strings.ToLower(task.ID), strings.ToLower(f.Query)) {
 			continue
 		}
+		if f.PriorityMin > 0 && task.Priority < f.PriorityMin {
+			continue
+		}
+		if f.PriorityMax > 0 && task.Priority > f.PriorityMax {
+			continue
+		}
 		values = append(values, task)
 	}
 	sort.Slice(values, func(i, j int) bool { return values[i].ID < values[j].ID })
@@ -164,22 +171,40 @@ func (s *Store) Dashboard(_ context.Context, warehouseID, operatorID string) (po
 			continue
 		}
 		result.Total++
+		switch task.Category {
+		case domain.CategoryReceiving:
+			result.InboundCount++
+		case domain.CategoryPutaway:
+			result.PutawayCount++
+		case domain.CategoryPicking:
+			result.PickingCount++
+		}
+		if task.Status == domain.StatusInProgress {
+			result.InProgressCount++
+			result.InProgress++
+		}
+		if task.Status == domain.StatusCompleted {
+			result.CompletedCount++
+			result.Completed++
+		}
 		if task.Priority >= 80 {
+			result.ActionableAlerts++
 			result.HighPriority++
 		}
-		if task.UpdatedAt.After(result.UpdatedAt) {
+		if task.UpdatedAt.After(result.AsOf) {
+			result.AsOf = task.UpdatedAt.UTC()
 			result.UpdatedAt = task.UpdatedAt.UTC()
 		}
 		if task.OperatorID != nil && *task.OperatorID == operatorID {
-			switch task.Status {
-			case domain.StatusAssigned:
-				result.Assigned++
-			case domain.StatusInProgress:
-				result.InProgress++
-			case domain.StatusCompleted:
-				result.Completed++
-			}
+			result.Assigned++
 		}
+	}
+	if result.AsOf.IsZero() {
+		result.AsOf = time.Now().UTC()
+	}
+	total := result.InboundCount + result.PutawayCount + result.PickingCount
+	if total > 0 {
+		result.CompletionPercent = float64(result.CompletedCount) * 100 / float64(total)
 	}
 	return result, nil
 }

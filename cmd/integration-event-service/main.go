@@ -48,7 +48,7 @@ func runKafka(applicationConfig config.Config) error {
 	defer pool.Close()
 
 	brokers := strings.Split(applicationConfig.KafkaBrokers, ",")
-	publisher, err := kafkaadapter.NewPublisher(kafkaadapter.Config{Brokers: brokers, GroupID: applicationConfig.KafkaGroupID, TopicPrefix: applicationConfig.KafkaTopicPrefix, SecurityProtocol: applicationConfig.KafkaSecurityProtocol})
+	publisher, err := kafkaadapter.NewPublisher(kafkaadapter.Config{Brokers: brokers, GroupID: applicationConfig.KafkaGroupID, TopicPrefix: applicationConfig.KafkaTopicPrefix, SecurityProtocol: applicationConfig.KafkaSecurityProtocol, TLSCAFile: applicationConfig.KafkaTLSCAFile, TLSCertFile: applicationConfig.KafkaTLSCertFile, TLSKeyFile: applicationConfig.KafkaTLSKeyFile, TLSServerName: applicationConfig.KafkaTLSServerName})
 	if err != nil {
 		return err
 	}
@@ -59,6 +59,28 @@ func runKafka(applicationConfig config.Config) error {
 		BatchSize: 100,
 		Metrics:   metrics,
 	}
+
+	// I-08: subscribe to the WMS warehouse task dispatch topics. Until this
+	// existed the service only published; it received no work from the system
+	// that owns the warehouse task.
+	taskConsumer, err := kafkaadapter.NewWMSTaskConsumer(brokers, applicationConfig.WMSTaskGroupID, pool, strings.Split(applicationConfig.WMSTaskTopics, ","))
+	if err != nil {
+		return err
+	}
+	taskConsumer.Start()
+	defer taskConsumer.Stop()
+	slog.Info("WMS task consumer started", "group", applicationConfig.WMSTaskGroupID, "topics", applicationConfig.WMSTaskTopics)
+
+	// I-08 (outbound): relay the cross-system outbox. These rows carry the
+	// canonical snake_case envelope on absolute topics and must not be
+	// topic-prefixed, so they need their own relay.
+	integrationRelay, err := kafkaadapter.NewIntegrationRelay(brokers, pool)
+	if err != nil {
+		return err
+	}
+	integrationRelay.Start()
+	defer integrationRelay.Stop()
+	slog.Info("integration outbox relay started")
 
 	go func() {
 		ticker := time.NewTicker(time.Second)

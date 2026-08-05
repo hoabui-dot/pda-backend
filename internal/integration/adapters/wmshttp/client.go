@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/company/pda-backend/internal/integration/ports"
 )
@@ -31,7 +32,7 @@ func New(baseURL, token string, client *http.Client) (*Client, error) {
 		return nil, fmt.Errorf("WMS bearer token is required")
 	}
 	if client == nil {
-		client = &http.Client{}
+		client = &http.Client{Timeout: 10 * time.Second}
 	}
 	return &Client{baseURL: strings.TrimRight(baseURL, "/"), token: token, http: client}, nil
 }

@@ -21,6 +21,58 @@ services:
       timeout: 3s
       retries: 10
 
+  pda-api-gateway:
+    build:
+      context: ..
+      dockerfile: cmd/pda-api-gateway/Dockerfile
+    ports: ["${PDA_GATEWAY_PORT:-8080}:8080"]
+    environment:
+      PDA_DATABASE_URL: postgres://pda:local-only-pda@postgres:5432/pda?sslmode=disable
+      PDA_REDIS_URL: redis://redis:6379/0
+      PDA_AUTH_MODE: internal
+      PDA_TOKEN_SECRET: local-compose-secret-change-me-32-bytes-minimum
+      PDA_TOKEN_ISSUER: pda-backend-local
+      PDA_TOKEN_AUDIENCE: pda-app-local
+      # P0-08: the gateway used to run PDA_MESSAGING_MODE=mock, which published
+      # every PDA fact into an in-memory log. No result ever left the service.
+      PDA_MESSAGING_MODE: ${PDA_MESSAGING_MODE:-kafka}
+      PDA_KAFKA_BROKERS: ${PDA_KAFKA_BROKERS:-kafka:29092}
+      PDA_KAFKA_GROUP_ID: ${PDA_GATEWAY_KAFKA_GROUP_ID:-pda-backend-gateway-v1}
+      PDA_KAFKA_TOPIC_PREFIX: pda
+      PDA_UPSTREAM_WMS_MODE: ${PDA_UPSTREAM_WMS_MODE:-mock}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks: [default, platform]
+
+  # I-08: consumes WMS.PDA.WarehouseTask*.v1 and relays the PDA outbox. It is
+  # the only PDA process that talks to Kafka, and it must run in kafka mode —
+  # in mock mode no warehouse task ever reaches the device.
+  integration-event-service:
+    build:
+      context: ..
+      dockerfile: cmd/integration-event-service/Dockerfile
+    ports: ["${PDA_INTEGRATION_PORT:-8085}:8085"]
+    environment:
+      PDA_DATABASE_URL: postgres://pda:local-only-pda@postgres:5432/pda?sslmode=disable
+      PDA_REDIS_URL: redis://redis:6379/0
+      PDA_AUTH_MODE: internal
+      PDA_TOKEN_SECRET: local-compose-secret-change-me-32-bytes-minimum
+      PDA_TOKEN_ISSUER: pda-backend-local
+      PDA_TOKEN_AUDIENCE: pda-app-local
+      PDA_MESSAGING_MODE: kafka
+      PDA_KAFKA_BROKERS: ${PDA_KAFKA_BROKERS:-kafka:29092}
+      PDA_KAFKA_GROUP_ID: ${PDA_KAFKA_GROUP_ID:-pda-backend-integration-v1}
+      PDA_KAFKA_TOPIC_PREFIX: pda
+      PDA_WMS_TASK_GROUP_ID: ${PDA_WMS_TASK_GROUP_ID:-pda-backend-wms-tasks-v1}
+      PDA_WMS_TASK_TOPICS: ${PDA_WMS_TASK_TOPICS:-WMS.PDA.WarehouseTaskCreated.v1,WMS.PDA.WarehouseTaskUpdated.v1,WMS.PDA.WarehouseTaskCancelled.v1}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks: [default, platform]
+
 # Kafka is provided by the shared MES platform. PDA must not start a second
 # broker or bind the shared host port independently.
 

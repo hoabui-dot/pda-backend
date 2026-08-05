@@ -96,6 +96,31 @@ func TestLoginProfileRegistrationAndBootstrap(t *testing.T) {
 	}
 }
 
+func TestPDASessionFieldsAndRotatingRefreshToken(t *testing.T) {
+	handler := setup(t, 10, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	response := request(handler, http.MethodPost, "/api/pda/v1/auth/login", `{"username":"operator","password":"demo-password","deviceId":"DEVICE-01","deviceModel":"TC26","appVersion":"1.0","warehouseId":"WH-01","locale":"vi-VN"}`, "", map[string]string{"Accept-Language": "vi-VN"})
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"employeeCode":"EMP-0001"`) || !strings.Contains(response.Body.String(), `"refreshToken"`) {
+		t.Fatalf("PDA login contract: %d %s", response.Code, response.Body.String())
+	}
+	var envelope struct {
+		Data struct {
+			AccessToken  string `json:"accessToken"`
+			RefreshToken string `json:"refreshToken"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &envelope); err != nil {
+		t.Fatal(err)
+	}
+	refreshed := request(handler, http.MethodPost, "/api/pda/v1/auth/refresh", `{"refreshToken":"`+envelope.Data.RefreshToken+`","deviceId":"DEVICE-01"}`, "", nil)
+	if refreshed.Code != http.StatusOK || strings.Contains(refreshed.Body.String(), envelope.Data.RefreshToken) {
+		t.Fatalf("refresh rotation: %d %s", refreshed.Code, refreshed.Body.String())
+	}
+	replayed := request(handler, http.MethodPost, "/api/pda/v1/auth/refresh", `{"refreshToken":"`+envelope.Data.RefreshToken+`","deviceId":"DEVICE-01"}`, "", nil)
+	if replayed.Code != http.StatusUnauthorized {
+		t.Fatalf("refresh token replay: %d %s", replayed.Code, replayed.Body.String())
+	}
+}
+
 func TestInvalidLoginUnauthorizedAndScopeFailures(t *testing.T) {
 	handler := setup(t, 10, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	invalid := request(handler, http.MethodPost, "/api/pda/v1/auth/login", `{"username":"operator","password":"wrong"}`, "", nil)
@@ -141,6 +166,23 @@ func TestErrorsUseCommonEnvelope(t *testing.T) {
 	}
 }
 
+func TestCommonLanguageAndOperatorHeaders(t *testing.T) {
+	handler := setup(t, 10, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	localized := request(handler, http.MethodGet, "/healthz", "", "", map[string]string{"Accept-Language": "vi-VN"})
+	if localized.Code != http.StatusOK || localized.Header().Get("Content-Language") != "vi-VN" {
+		t.Fatalf("language policy: %d %s %s", localized.Code, localized.Header().Get("Content-Language"), localized.Body.String())
+	}
+	invalidLanguage := request(handler, http.MethodGet, "/healthz", "", "", map[string]string{"Accept-Language": "fr-FR"})
+	if invalidLanguage.Code != http.StatusBadRequest || !strings.Contains(invalidLanguage.Body.String(), "INVALID_REQUEST") {
+		t.Fatalf("invalid language: %d %s", invalidLanguage.Code, invalidLanguage.Body.String())
+	}
+	token := login(t, handler)
+	mismatch := request(handler, http.MethodGet, "/api/pda/v1/me", "", token, map[string]string{"X-Operator-Id": "OTHER-OPERATOR"})
+	if mismatch.Code != http.StatusForbidden || !strings.Contains(mismatch.Body.String(), "OPERATOR_CONTEXT_MISMATCH") {
+		t.Fatalf("operator mismatch: %d %s", mismatch.Code, mismatch.Body.String())
+	}
+}
+
 func TestRefreshRotatesTokenAndLogoutRevokesIt(t *testing.T) {
 	handler := setup(t, 10, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	original := login(t, handler)
@@ -181,6 +223,9 @@ func TestRateLimitCorrelationTimeoutAndRedactedLogging(t *testing.T) {
 	second := request(handler, http.MethodPost, "/api/pda/v1/auth/login", `{"username":"operator","password":"demo-password"}`, "", nil)
 	if second.Code != http.StatusTooManyRequests {
 		t.Fatalf("rate limit: %d", second.Code)
+	}
+	if second.Header().Get("Retry-After") == "" {
+		t.Fatal("rate limit did not return Retry-After")
 	}
 	if strings.Contains(logs.String(), "demo-password") || strings.Contains(logs.String(), "eyJ") {
 		t.Fatalf("sensitive value logged: %s", logs.String())
@@ -229,7 +274,7 @@ func TestDashboardTaskCenterAndClaimReleaseRoutes(t *testing.T) {
 		t.Fatalf("registration: %d %s", registration.Code, registration.Body.String())
 	}
 	headers := map[string]string{"X-Device-Id": "DEVICE-01", "X-Warehouse-Id": "WH-01"}
-	if response := request(handler, http.MethodGet, "/api/pda/v1/dashboard", "", token, headers); response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"total":3`) {
+	if response := request(handler, http.MethodGet, "/api/pda/v1/dashboard", "", token, headers); response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"inboundCount"`) || !strings.Contains(response.Body.String(), `"actionableAlertCount"`) || !strings.Contains(response.Body.String(), `"asOf"`) {
 		t.Fatalf("dashboard: %d %s", response.Code, response.Body.String())
 	}
 	if response := request(handler, http.MethodGet, "/api/pda/v1/tasks/summary?status=NEW", "", token, headers); response.Code != http.StatusOK || !strings.Contains(response.Body.String(), "RECEIVING") {
@@ -238,10 +283,17 @@ func TestDashboardTaskCenterAndClaimReleaseRoutes(t *testing.T) {
 	if response := request(handler, http.MethodGet, "/api/pda/v1/tasks?status=NEW&limit=1", "", token, headers); response.Code != http.StatusOK || !strings.Contains(response.Body.String(), "nextCursor") {
 		t.Fatalf("tasks: %d %s", response.Code, response.Body.String())
 	}
+	if response := request(handler, http.MethodGet, "/api/pda/v1/tasks/TASK-001", "", token, headers); response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"lockState":"AVAILABLE"`) || !strings.Contains(response.Body.String(), `"title":"RECEIVING task"`) {
+		t.Fatalf("task detail: %d %s", response.Code, response.Body.String())
+	}
 	claimHeaders := map[string]string{"X-Device-Id": "DEVICE-01", "X-Warehouse-Id": "WH-01", "Idempotency-Key": "00000000-0000-0000-0000-000000000301", "If-Match": `"1"`}
 	claim := request(handler, http.MethodPost, "/api/pda/v1/tasks/TASK-001/claim", "", token, claimHeaders)
 	if claim.Code != http.StatusOK || !strings.Contains(claim.Body.String(), `"version":2`) {
 		t.Fatalf("claim: %d %s", claim.Code, claim.Body.String())
+	}
+	status := request(handler, http.MethodGet, "/api/pda/v1/commands/00000000-0000-0000-0000-000000000301", "", token, headers)
+	if status.Code != http.StatusOK || !strings.Contains(status.Body.String(), `"status":"ACKNOWLEDGED"`) || !strings.Contains(status.Body.String(), "TASK_MUTATION") {
+		t.Fatalf("generic command status: %d %s", status.Code, status.Body.String())
 	}
 	replay := request(handler, http.MethodPost, "/api/pda/v1/tasks/TASK-001/claim", "", token, claimHeaders)
 	if replay.Code != http.StatusOK || !strings.Contains(replay.Body.String(), `"version":2`) {

@@ -43,6 +43,9 @@ func (m *memory) Del(_ context.Context, k ...string) error {
 	return nil
 }
 func (m *memory) Scan(context.Context, uint64, string, int64) ([]string, uint64, error) {
+	if m.down {
+		return nil, 0, errors.New("redis down")
+	}
 	return nil, 0, nil
 }
 func TestHitMissOutageStaleAndStampede(t *testing.T) {
@@ -64,7 +67,8 @@ func TestHitMissOutageStaleAndStampede(t *testing.T) {
 	if e != nil || !x.Stale || x.Value != 7 {
 		t.Fatal(x, e)
 	}
-	if metrics.Snapshot().Hits != 1 || metrics.Snapshot().Errors == 0 {
+	snapshot := metrics.Snapshot()
+	if snapshot.Hits != 1 || snapshot.Errors == 0 || snapshot.StaleServed != 1 {
 		t.Fatal(metrics.Snapshot())
 	}
 }
@@ -80,9 +84,26 @@ func TestVersionedKeysAndTTL(t *testing.T) {
 
 func TestBestEffortInvalidationDuringRedisOutage(t *testing.T) {
 	m := &memory{data: map[string]string{}, down: true}
-	inv := Invalidator{Cache: NewAside(m, time.Minute, &Metrics{}), Keys: KeyService{Version: "v1"}}
-	if err := inv.InvalidateMovementViews(context.Background(), "WH", "OP"); err != nil {
-		t.Fatal(err)
+	metrics := &Metrics{}
+	inv := Invalidator{Cache: NewAside(m, time.Minute, metrics), Keys: KeyService{Version: "v1"}}
+	if err := inv.InvalidateMovementViews(context.Background(), "WH", "OP"); err == nil {
+		t.Fatal("expected invalidation error to remain observable to the caller")
+	}
+	if metrics.Snapshot().InvalidationFailure == 0 {
+		t.Fatal(metrics.Snapshot())
+	}
+}
+
+func TestMutationKeyScopesWarehouseAndOperator(t *testing.T) {
+	keys := KeyService{Version: "v1"}
+	if keys.Key("dashboard", "WH-1", "OP") == keys.Key("dashboard", "WH-2", "OP") {
+		t.Fatal("dashboard cache key crossed warehouse boundary")
+	}
+	if keys.Key("task-summary", "WH", "OP-1", "OPEN") == keys.Key("task-summary", "WH", "OP-2", "OPEN") {
+		t.Fatal("task summary cache key crossed operator boundary")
+	}
+	if keys.Key("inventory-balance", "WH", "ITEM", "A") == keys.Key("inventory-balance", "WH", "ITEM", "B") {
+		t.Fatal("inventory cache key crossed location boundary")
 	}
 }
 

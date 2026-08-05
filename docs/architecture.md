@@ -12,7 +12,7 @@ BE-00 provides the common actor/command/event contracts, outbox/inbox ports, det
 
 ## BE-01 public boundary
 
-The gateway owns `/api/pda/v1`, correlation propagation, bounded request bodies, request timeouts, redacted request metadata logs, and auth rate limiting. Identity credentials are resolved from a deterministic fixture only in explicit mock mode. Mock tokens are signed, expiring, JWT-shaped local tokens; they are not production credentials. Application services rehydrate the operator from the trusted token, validate warehouse membership, and validate device registration before bootstrap context is returned.
+The gateway owns `/api/pda/v1`, correlation propagation, bounded request bodies, request timeouts, redacted request metadata logs, and auth rate limiting. Normal gateway runtime uses backend-owned PostgreSQL identity persistence, Argon2id password hashes, durable sessions, and rotated opaque refresh tokens. The deterministic fixture and mock token adapter remain test-only composition. Application services rehydrate the operator from the trusted token, validate warehouse membership, and validate device registration before bootstrap context is returned.
 
 Future OIDC validation implements the identity token-provider port. Production startup rejects mock auth, and the current composition fails explicitly when the OIDC adapter is selected before its integration phase.
 

@@ -2,11 +2,16 @@ package domain
 
 type Operator struct {
 	ID           string   `json:"id"`
+	EmployeeCode string   `json:"employeeCode"`
 	Username     string   `json:"username"`
 	DisplayName  string   `json:"displayName"`
 	Password     string   `json:"-"`
+	PasswordHash string   `json:"-"`
 	Roles        []string `json:"roles"`
+	Permissions  []string `json:"permissions"`
 	WarehouseIDs []string `json:"warehouseIds"`
+	ShiftCode    string   `json:"shiftCode"`
+	Active       bool     `json:"active"`
 }
 
 type Warehouse struct {

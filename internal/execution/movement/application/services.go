@@ -43,6 +43,20 @@ type PutawayService struct{ d *dependencies }
 type PickingService struct{ d *dependencies }
 type ReplenishmentService struct{ d *dependencies }
 
+func (s *Services) CommandStatus(ctx context.Context, id uuid.UUID, actor platform.ActorContext) (ports.CommandResult, error) {
+	result, found, err := s.Putaway.d.commands.Find(ctx, id.String())
+	if err != nil {
+		return ports.CommandResult{}, err
+	}
+	if !found {
+		return ports.CommandResult{}, domain.ErrNotFound
+	}
+	if result.WarehouseID != actor.WarehouseID || result.OperatorID != actor.OperatorID {
+		return ports.CommandResult{}, &platform.DomainError{Code: "WAREHOUSE_ACCESS_DENIED", SafeMessage: "Command access denied"}
+	}
+	return result, nil
+}
+
 func list(ctx context.Context, d *dependencies, w domain.Workflow, a platform.ActorContext) ([]domain.Task, error) {
 	return d.repo.List(ctx, w, a.WarehouseID, a.OperatorID)
 }
@@ -202,9 +216,8 @@ func mutate(ctx context.Context, d *dependencies, w domain.Workflow, c Command, 
 		return domain.Task{}, err
 	}
 	if changed {
-		if e := d.invalidator.InvalidateMovementViews(ctx, c.Actor.WarehouseID, c.Actor.OperatorID); e != nil {
-			return result, e
-		}
+		// The transaction is committed above; cache invalidation is best effort.
+		_ = d.invalidator.InvalidateMovementViews(ctx, c.Actor.WarehouseID, c.Actor.OperatorID)
 		if e := d.publisher.Publish(ctx, envelope); e != nil {
 			return result, &platform.DomainError{Code: "MESSAGING_PUBLISH_PENDING", SafeMessage: "Movement committed; event publication pending", Retryable: true}
 		}

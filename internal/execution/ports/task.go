@@ -10,6 +10,8 @@ import (
 
 type TaskFilter struct {
 	WarehouseID, OperatorID, Category, Status, Query, Cursor string
+	PriorityMin, PriorityMax                                 int
+	Zone, DateFrom, DateTo, Sort, Direction                  string
 	Limit                                                    int
 }
 type TaskPage struct {
@@ -22,12 +24,22 @@ type SummaryItem struct {
 	Count    int                 `json:"count"`
 }
 type Dashboard struct {
-	Total        int       `json:"total"`
-	Assigned     int       `json:"assigned"`
-	InProgress   int       `json:"inProgress"`
-	Completed    int       `json:"completed"`
-	HighPriority int       `json:"highPriority"`
-	UpdatedAt    time.Time `json:"updatedAt"`
+	InboundCount      int       `json:"inboundCount"`
+	PutawayCount      int       `json:"putawayCount"`
+	PickingCount      int       `json:"pickingCount"`
+	ShippingCount     int       `json:"shippingCount"`
+	InProgressCount   int       `json:"inProgressCount"`
+	CompletedCount    int       `json:"completedCount"`
+	CompletionPercent float64   `json:"completionPercent"`
+	PendingSyncCount  *int      `json:"pendingSyncCount"`
+	ActionableAlerts  int       `json:"actionableAlertCount"`
+	AsOf              time.Time `json:"asOf"`
+	Total             int       `json:"total,omitempty"`
+	Assigned          int       `json:"assigned,omitempty"`
+	InProgress        int       `json:"inProgress,omitempty"`
+	Completed         int       `json:"completed,omitempty"`
+	HighPriority      int       `json:"highPriority,omitempty"`
+	UpdatedAt         time.Time `json:"updatedAt,omitempty"`
 }
 type IdempotencyResult struct {
 	Task  domain.Task

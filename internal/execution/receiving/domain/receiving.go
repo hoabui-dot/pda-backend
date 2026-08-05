@@ -26,11 +26,15 @@ var (
 	ErrQuantityExceeded    = &platform.DomainError{Code: "QUANTITY_EXCEEDS_ALLOWED", SafeMessage: "Quantity exceeds allowed amount"}
 	ErrRemarkRequired      = &platform.DomainError{Code: "REMARK_REQUIRED", SafeMessage: "A remark is required for quantity variance"}
 	ErrIncomplete          = &platform.DomainError{Code: "RECEIVING_TASK_INCOMPLETE", SafeMessage: "All receiving lines must be complete"}
+	ErrConditionInvalid    = &platform.DomainError{Code: "CONDITION_INVALID", SafeMessage: "Condition is not allowed for this receiving line"}
 )
 
 type Policy struct {
-	AllowOverReceipt        bool `json:"allowOverReceipt"`
-	RequireRemarkOnVariance bool `json:"requireRemarkOnVariance"`
+	AllowOverReceipt        bool     `json:"allowOverReceipt"`
+	RequireRemarkOnVariance bool     `json:"requireRemarkOnVariance"`
+	LotRequired             bool     `json:"lotRequired"`
+	SerialRequired          bool     `json:"serialRequired"`
+	ConditionPolicy         []string `json:"conditionPolicy"`
 }
 type Line struct {
 	ID               string `json:"id"`
@@ -39,10 +43,13 @@ type Line struct {
 	Barcode          string `json:"barcode"`
 	ExpectedQuantity int64  `json:"expectedQuantity"`
 	ReceivedQuantity int64  `json:"receivedQuantity"`
+	SKU              string `json:"sku"`
 }
 type Task struct {
 	ID          string    `json:"id"`
+	OrderID     string    `json:"orderId"`
 	PONumber    string    `json:"poNumber"`
+	Supplier    string    `json:"supplier"`
 	Status      Status    `json:"status"`
 	WarehouseID string    `json:"warehouseId"`
 	OperatorID  *string   `json:"operatorId"`
@@ -69,6 +76,10 @@ func (t *Task) Start(operator string, base int64, now time.Time) error {
 	return nil
 }
 func (t *Task) Confirm(operator, lineID, barcode string, quantity int64, remark *string, base int64, now time.Time) (Line, error) {
+	return t.ConfirmWithCondition(operator, lineID, barcode, quantity, "GOOD", remark, base, now)
+}
+
+func (t *Task) ConfirmWithCondition(operator, lineID, barcode string, quantity int64, condition string, remark *string, base int64, now time.Time) (Line, error) {
 	if t.Version != base {
 		return Line{}, ErrVersionConflict
 	}
@@ -88,6 +99,21 @@ func (t *Task) Confirm(operator, lineID, barcode string, quantity int64, remark 
 		}
 		if quantity <= 0 {
 			return Line{}, ErrQuantityExceeded
+		}
+		if condition == "" {
+			condition = "GOOD"
+		}
+		if len(t.Policy.ConditionPolicy) > 0 {
+			allowed := false
+			for _, value := range t.Policy.ConditionPolicy {
+				if value == condition {
+					allowed = true
+					break
+				}
+			}
+			if !allowed {
+				return Line{}, ErrConditionInvalid
+			}
 		}
 		remaining := line.ExpectedQuantity - line.ReceivedQuantity
 		if quantity > remaining && !t.Policy.AllowOverReceipt {

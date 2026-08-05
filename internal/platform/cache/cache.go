@@ -27,11 +27,20 @@ func (k KeyService) Key(kind string, parts ...string) string {
 type Metrics struct {
 	Hits, Misses, Errors atomic.Uint64
 	LatencyNanos         atomic.Uint64
+	StaleServed          atomic.Uint64
+	InvalidationSuccess  atomic.Uint64
+	InvalidationFailure  atomic.Uint64
 }
-type Snapshot struct{ Hits, Misses, Errors, LatencyNanos uint64 }
+type Snapshot struct {
+	Hits, Misses, Errors, LatencyNanos                    uint64
+	StaleServed, InvalidationSuccess, InvalidationFailure uint64
+}
 
 func (m *Metrics) Snapshot() Snapshot {
-	return Snapshot{m.Hits.Load(), m.Misses.Load(), m.Errors.Load(), m.LatencyNanos.Load()}
+	return Snapshot{
+		Hits: m.Hits.Load(), Misses: m.Misses.Load(), Errors: m.Errors.Load(), LatencyNanos: m.LatencyNanos.Load(),
+		StaleServed: m.StaleServed.Load(), InvalidationSuccess: m.InvalidationSuccess.Load(), InvalidationFailure: m.InvalidationFailure.Load(),
+	}
 }
 
 type Store interface {
@@ -88,6 +97,7 @@ func Get[T any](c context.Context, a *Aside, key string, load func(context.Conte
 	})
 	if e != nil {
 		if v, ok := a.stale.Load(key); ok {
+			a.metrics.StaleServed.Add(1)
 			return Result[T]{Value: v.(T), Stale: true}, nil
 		}
 		var zero T

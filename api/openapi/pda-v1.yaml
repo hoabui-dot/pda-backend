@@ -1,8 +1,8 @@
 openapi: 3.0.3
 info:
   title: PDA Backend API
-  version: 0.2.0
-  description: BE-01 public authentication, identity, device, warehouse, and bootstrap contract.
+  version: 0.3.0
+  description: PDA public transport envelope, headers, metadata, identity, device, warehouse, and workflow contract.
 servers:
   - url: /api/pda/v1
 paths:
@@ -20,8 +20,8 @@ paths:
         '200': {description: Ready}
   /auth/login:
     post:
-      operationId: mockLogin
-      description: Local/test mock login. Production rejects mock auth mode.
+      operationId: login
+      description: Authenticates an operator. Local mock auth is available only outside production; OIDC remains a separate adapter contract.
       requestBody:
         required: true
         content:
@@ -31,10 +31,20 @@ paths:
         '200': {description: Authenticated}
         '401': {description: Invalid credentials}
         '429': {description: Rate limited}
+  /commands/{commandId}:
+    get:
+      operationId: commandStatus
+      security: [{bearerAuth: []}]
+      parameters: [{name: commandId, in: path, required: true, schema: {type: string, format: uuid}}]
+      responses: {'200': {description: Canonical durable command status}, '403': {description: Command access denied}, '404': {description: Command not found}}
   /auth/refresh:
     post:
-      operationId: refreshMockToken
-      security: [{bearerAuth: []}]
+      operationId: refreshSession
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/RefreshRequest'}
       responses:
         '200': {description: Token rotated}
         '401': {description: Unauthorized}
@@ -113,6 +123,13 @@ paths:
         - {name: status, in: query, schema: {type: string}}
         - {name: cursor, in: query, schema: {type: string}}
         - {name: q, in: query, schema: {type: string}}
+        - {name: priorityMin, in: query, schema: {type: integer, minimum: 0, maximum: 100}}
+        - {name: priorityMax, in: query, schema: {type: integer, minimum: 0, maximum: 100}}
+        - {name: zone, in: query, schema: {type: string}}
+        - {name: dateFrom, in: query, schema: {type: string, format: date-time}}
+        - {name: dateTo, in: query, schema: {type: string, format: date-time}}
+        - {name: sort, in: query, schema: {type: string, enum: [priority, dueAt, updatedAt, id]}}
+        - {name: direction, in: query, schema: {type: string, enum: [asc, desc], default: asc}}
         - {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 100}}
       responses:
         '200': {description: Cursor-paginated task page}
@@ -225,9 +242,11 @@ paths:
   /replenishment/tasks/{taskId}/confirmation:
     post: {$ref: '#/components/x-movementConfirmation'}
   /inventory/search:
-    get: {security: [{bearerAuth: []}], parameters: [{name: q, in: query, schema: {type: string}}], responses: {'200': {description: Authoritative item and bin search with asOf}}}
+    get: {security: [{bearerAuth: []}], parameters: [{name: q, in: query, schema: {type: string}}, {name: barcode, in: query, schema: {type: string}}, {name: itemId, in: query, schema: {type: string}}, {name: locationCode, in: query, schema: {type: string}}, {name: lotNumber, in: query, schema: {type: string}}, {name: serialNumber, in: query, schema: {type: string}}, {name: lpnId, in: query, schema: {type: string}}, {name: cursor, in: query, schema: {type: string}}, {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 100}}], responses: {'200': {description: Authoritative item and bin search with asOf and stale metadata}}}
+  /inventory/items:
+    get: {$ref: '#/paths/~1inventory~1search/get'}
   /inventory/balances:
-    get: {security: [{bearerAuth: []}], parameters: [{name: itemId, in: query, schema: {type: string}}, {name: locationId, in: query, schema: {type: string}}], responses: {'200': {description: Authoritative balances with asOf}}}
+    get: {security: [{bearerAuth: []}], parameters: [{name: itemId, in: query, schema: {type: string}}, {name: locationId, in: query, schema: {type: string}}, {name: locationCode, in: query, schema: {type: string}}, {name: lotNumber, in: query, schema: {type: string}}, {name: serialNumber, in: query, schema: {type: string}}, {name: lpnId, in: query, schema: {type: string}}, {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 100}}], responses: {'200': {description: Authoritative balances with asOf and stale metadata}}}
   /inventory/movements:
     get: {security: [{bearerAuth: []}], parameters: [{name: itemId, in: query, schema: {type: string}}, {name: cursor, in: query, schema: {type: string}}], responses: {'200': {description: Movement ledger history}}}
   /inventory/transfers/source-validations:
@@ -238,6 +257,15 @@ paths:
     post: {$ref: '#/components/x-transferValidation'}
   /inventory/transfers:
     post: {$ref: '#/components/x-transferCommand'}
+  /transfers/validate:
+    post: {$ref: '#/components/x-transferValidation'}
+  /transfers/confirm:
+    post: {$ref: '#/components/x-transferCommand'}
+  /transfers/commands/{commandId}:
+    get:
+      security: [{bearerAuth: []}]
+      parameters: [{name: commandId, in: path, required: true, schema: {type: string, format: uuid}}]
+      responses: {'200': {description: Durable transfer command result}, '404': {description: Command not found}}
   /cycle-count/tasks:
     get: {security: [{bearerAuth: []}], responses: {'200': {description: Cycle count tasks}}}
   /cycle-count/tasks/{taskId}:
@@ -248,6 +276,25 @@ paths:
     post: {$ref: '#/components/x-countCommand'}
   /cycle-count/tasks/{taskId}/completion:
     post: {$ref: '#/components/x-movementCommand'}
+  /counts:
+    get: {security: [{bearerAuth: []}], responses: {'200': {description: Cycle count tasks with freshness}}}
+  /counts/{taskId}:
+    get: {security: [{bearerAuth: []}], parameters: [{name: taskId, in: path, required: true, schema: {type: string}}], responses: {'200': {description: Cycle count task and variance state}}}
+  /counts/{taskId}/validate-location:
+    post: {$ref: '#/components/x-countValidation'}
+  /counts/{taskId}/validate-item:
+    post: {$ref: '#/components/x-countValidation'}
+  /counts/{taskId}/lines/{lineId}/submit:
+    post: {$ref: '#/components/x-countCommand'}
+  /counts/{taskId}/recount:
+    post: {$ref: '#/components/x-countCommand'}
+  /counts/{taskId}/complete:
+    post: {$ref: '#/components/x-movementCommand'}
+  /counts/commands/{commandId}:
+    get:
+      security: [{bearerAuth: []}]
+      parameters: [{name: commandId, in: path, required: true, schema: {type: string, format: uuid}}]
+      responses: {'200': {description: Durable count command result}, '404': {description: Command not found}}
   /shipments/{shipmentId}:
     get: {security: [{bearerAuth: []}], parameters: [{name: shipmentId, in: path, required: true, schema: {type: string}}], responses: {'200': {description: Shipment package carrier tracking and version summary}}}
   /shipments/{shipmentId}/readiness:
@@ -258,6 +305,18 @@ paths:
       parameters: [{name: shipmentId, in: path, required: true, schema: {type: string}}, {$ref: '#/components/parameters/IdempotencyKey'}, {$ref: '#/components/parameters/IfMatch'}]
       requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/ShipmentConfirmationRequest'}}}}
       responses: {'200': {description: Shipment confirmed or replayed}, '409': {description: Stale version}, '422': {description: Readiness carrier tracking or package invalid}}
+  /shipments/{shipmentId}/packages/{packageId}/verify:
+    post:
+      security: [{bearerAuth: []}]
+      parameters: [{name: shipmentId, in: path, required: true, schema: {type: string}}, {name: packageId, in: path, required: true, schema: {type: string}}, {$ref: '#/components/parameters/IfMatch'}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/PackageVerifyRequest'}}}}
+      responses: {'200': {description: Package verified and readiness recalculated}, '409': {description: Stale version}, '422': {description: Unknown or wrong-context package}}
+  /shipments/{shipmentId}/confirm:
+    post:
+      security: [{bearerAuth: []}]
+      parameters: [{name: shipmentId, in: path, required: true, schema: {type: string}}, {$ref: '#/components/parameters/IdempotencyKey'}, {$ref: '#/components/parameters/IfMatch'}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/ShipmentConfirmRequest'}}}}
+      responses: {'200': {description: Shipment confirmed or replayed}, '409': {description: Stale version}, '422': {description: Readiness or carrier/tracking validation}}
   /shipments/{shipmentId}/commands/{commandId}:
     get: {security: [{bearerAuth: []}], parameters: [{name: shipmentId, in: path, required: true, schema: {type: string}}, {name: commandId, in: path, required: true, schema: {type: string, format: uuid}}], responses: {'200': {description: Durable shipping command result}}}
 components:
@@ -273,7 +332,13 @@ components:
   x-countCommand:
     security: [{bearerAuth: []}]
     parameters: [{name: taskId, in: path, required: true, schema: {type: string}}, {$ref: '#/components/parameters/IdempotencyKey'}, {$ref: '#/components/parameters/IfMatch'}]
-    responses: {'200': {description: Count command committed or replayed}, '409': {description: Version conflict}}
+    requestBody: {required: false, content: {application/json: {schema: {$ref: '#/components/schemas/CountSubmitRequest'}}}}
+    responses: {'200': {description: Count command committed or replayed}, '409': {description: Version conflict}, '422': {description: Variance review required}}
+  x-countValidation:
+    security: [{bearerAuth: []}]
+    parameters: [{name: taskId, in: path, required: true, schema: {type: string}}]
+    requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/CountValidationRequest'}}}}
+    responses: {'200': {description: Count validation accepted}, '422': {description: Invalid location or item}}
   x-movementCommand:
     security: [{bearerAuth: []}]
     parameters: [{name: taskId, in: path, required: true, schema: {type: string}}, {$ref: '#/components/parameters/IdempotencyKey'}, {$ref: '#/components/parameters/IfMatch'}]
@@ -319,7 +384,66 @@ components:
       in: header
       required: true
       schema: {type: string}
+    OperatorId:
+      name: X-Operator-Id
+      in: header
+      required: false
+      description: Non-authoritative operator verification context; server identity comes from the bearer token.
+      schema: {type: string, minLength: 1}
+    AcceptLanguage:
+      name: Accept-Language
+      in: header
+      required: false
+      schema: {type: string, enum: [vi-VN, en-US], default: en-US}
   schemas:
+    Envelope:
+      type: object
+      required: [data, meta, errors]
+      properties:
+        data: {nullable: true}
+        meta: {$ref: '#/components/schemas/Meta'}
+        errors:
+          type: array
+          items: {$ref: '#/components/schemas/APIError'}
+    Meta:
+      type: object
+      required: [serverTime, correlationId]
+      properties:
+        serverTime: {type: string, format: date-time}
+        correlationId: {type: string, format: uuid}
+        version: {nullable: true}
+        nextCursor: {type: string, nullable: true}
+        hasMore: {type: boolean}
+        asOf: {type: string, format: date-time, nullable: true}
+        stale: {type: boolean}
+    APIError:
+      type: object
+      required: [code, retryable]
+      properties:
+        code: {type: string}
+        message: {type: string}
+        details: {type: object, additionalProperties: true, nullable: true}
+        retryable: {type: boolean}
+    ConflictDetails:
+      type: object
+      properties:
+        aggregateId: {type: string}
+        currentVersion: {type: integer, format: int64}
+        requestedVersion: {type: integer, format: int64}
+    CommandStatus:
+      type: object
+      required: [commandId, status]
+      properties:
+        commandId: {type: string, format: uuid}
+        idempotencyKey: {type: string, format: uuid}
+        type: {type: string}
+        status: {type: string, enum: [PENDING, ACKNOWLEDGED, CONFLICT, PERMANENT_FAILURE]}
+        aggregateId: {type: string, nullable: true}
+        version: {type: integer, format: int64, nullable: true}
+        result: {nullable: true}
+        errorCode: {type: string, nullable: true}
+        correlationId: {type: string, format: uuid}
+        processedAt: {type: string, format: date-time, nullable: true}
     ShipmentConfirmationRequest:
       type: object
       required: [carrier, trackingNumber]
@@ -327,6 +451,30 @@ components:
       properties:
         carrier: {type: string}
         trackingNumber: {type: string, minLength: 6, maxLength: 40}
+    PackageVerifyRequest:
+      type: object
+      required: [shipmentId, packageId, rawValue, normalizedValue, symbology, scanContext, baseVersion]
+      additionalProperties: false
+      properties:
+        shipmentId: {type: string}
+        packageId: {type: string}
+        rawValue: {type: string}
+        normalizedValue: {type: string}
+        symbology: {type: string}
+        scanContext: {type: string, enum: [SHIPPING_PACKAGE]}
+        baseVersion: {type: integer, format: int64}
+    ShipmentConfirmRequest:
+      type: object
+      required: [commandId, idempotencyKey, shipmentId, carrierCode, trackingNumber, verifiedPackageIds, baseVersion]
+      additionalProperties: false
+      properties:
+        commandId: {type: string, format: uuid}
+        idempotencyKey: {type: string, format: uuid}
+        shipmentId: {type: string}
+        carrierCode: {type: string, enum: [DHL, FEDEX, UPS, VNPOST]}
+        trackingNumber: {type: string, minLength: 6, maxLength: 40}
+        verifiedPackageIds: {type: array, items: {type: string}}
+        baseVersion: {type: integer, format: int64}
     TransferRequest:
       type: object
       required: [sourceLocation, destinationLocation, itemId, quantity]
@@ -336,6 +484,61 @@ components:
         destinationLocation: {type: string}
         itemId: {type: string}
         quantity: {type: integer, minimum: 1}
+        lotNumber: {type: string, nullable: true}
+        serialNumber: {type: string, nullable: true}
+        scanContext: {type: string}
+        baseVersion: {type: integer, format: int64}
+        commandId: {type: string, format: uuid}
+        idempotencyKey: {type: string, format: uuid}
+        reason: {type: string, nullable: true}
+    InventoryBalance:
+      type: object
+      properties:
+        itemId: {type: string}
+        itemCode: {type: string}
+        description: {type: string}
+        locationId: {type: string}
+        locationCode: {type: string}
+        onHand: {type: integer, format: int64}
+        reserved: {type: integer, format: int64}
+        available: {type: integer, format: int64}
+        damaged: {type: integer, format: int64}
+        hold: {type: integer, format: int64}
+        quarantine: {type: integer, format: int64}
+        inTransit: {type: integer, format: int64}
+        uom: {type: string}
+        lotNumber: {type: string, nullable: true}
+        serialNumber: {type: string, nullable: true}
+        asOf: {type: string, format: date-time}
+        version: {type: integer, format: int64}
+        stale: {type: boolean}
+    CountValidationRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        taskId: {type: string}
+        lineId: {type: string}
+        location: {type: string}
+        item: {type: string}
+        itemId: {type: string}
+    CountSubmitRequest:
+      type: object
+      required: [commandId, idempotencyKey, taskId, lineId, countedQuantity, baseVersion]
+      additionalProperties: false
+      properties:
+        commandId: {type: string, format: uuid}
+        idempotencyKey: {type: string, format: uuid}
+        taskId: {type: string}
+        lineId: {type: string}
+        location: {type: string}
+        item: {type: string}
+        lot: {type: string, nullable: true}
+        serial: {type: string, nullable: true}
+        countedQuantity: {type: integer, format: int64, minimum: 0}
+        blindCount: {type: boolean}
+        reasonCode: {type: string, nullable: true}
+        recount: {type: boolean}
+        baseVersion: {type: integer, format: int64}
     MovementValidationRequest:
       type: object
       additionalProperties: false
@@ -343,12 +546,26 @@ components:
         value: {type: string}
         location: {type: string}
         barcode: {type: string}
+        rawValue: {type: string}
+        normalizedValue: {type: string}
+        symbology: {type: string}
+        scanContext: {type: string}
+        taskId: {type: string}
+        commandId: {type: string, format: uuid}
+        idempotencyKey: {type: string, format: uuid}
+        baseVersion: {type: integer, format: int64}
+        scannedAt: {type: string, format: date-time}
     MovementQuantityRequest:
       type: object
       required: [quantity]
       additionalProperties: false
       properties:
         quantity: {type: integer, format: int64, minimum: 1}
+        taskId: {type: string}
+        commandId: {type: string, format: uuid}
+        idempotencyKey: {type: string, format: uuid}
+        baseVersion: {type: integer, format: int64}
+        scannedAt: {type: string, format: date-time}
     LoginRequest:
       type: object
       required: [username, password]
@@ -356,6 +573,39 @@ components:
       properties:
         username: {type: string, minLength: 1, maxLength: 128}
         password: {type: string, minLength: 1, maxLength: 256}
+        deviceId: {type: string, minLength: 1, maxLength: 128}
+        deviceModel: {type: string, minLength: 1, maxLength: 128}
+        appVersion: {type: string, minLength: 1, maxLength: 64}
+        warehouseId: {type: string, minLength: 1, maxLength: 64}
+        locale: {type: string, enum: [vi-VN, en-US]}
+    RefreshRequest:
+      type: object
+      required: [refreshToken, deviceId]
+      additionalProperties: false
+      properties:
+        refreshToken: {type: string, minLength: 1}
+        deviceId: {type: string, minLength: 1, maxLength: 128}
+    Session:
+      type: object
+      required: [accessToken, refreshToken, tokenType, expiresAt, operatorId, employeeCode, displayName, username, roles, permissions, deviceRegistrationStatus, featureFlags, scannerPolicy, localePolicy]
+      properties:
+        accessToken: {type: string}
+        refreshToken: {type: string}
+        tokenType: {type: string, enum: [Bearer]}
+        expiresAt: {type: string, format: date-time}
+        operatorId: {type: string}
+        employeeCode: {type: string}
+        displayName: {type: string}
+        username: {type: string}
+        roles: {type: array, items: {type: string}}
+        permissions: {type: array, items: {type: string}}
+        warehouseId: {type: string, nullable: true}
+        warehouseName: {type: string, nullable: true}
+        shiftCode: {type: string, nullable: true}
+        deviceRegistrationStatus: {type: string, enum: [REGISTERED, UNREGISTERED]}
+        featureFlags: {type: object, additionalProperties: {type: boolean}}
+        scannerPolicy: {type: object, additionalProperties: true}
+        localePolicy: {type: array, items: {type: string, enum: [vi-VN, en-US]}}
     DeviceRegistrationRequest:
       type: object
       required: [deviceId, warehouseId]
@@ -375,15 +625,22 @@ components:
         updatedAt: {type: string, format: date-time}
     Task:
       type: object
-      required: [id, category, status, priority, warehouseId, version, updatedAt]
+      required: [id, category, type, status, priority, title, lineCount, pieceCount, assignedOperatorId, lockState, warehouseId, version, createdAt, updatedAt]
       properties:
         id: {type: string}
         category: {type: string, enum: [RECEIVING, PUTAWAY, PICKING, REPLENISHMENT, CYCLE_COUNT]}
+        type: {type: string}
         status: {type: string, enum: [NEW, ASSIGNED, IN_PROGRESS, COMPLETED, ON_HOLD]}
         priority: {type: integer, minimum: 0, maximum: 100}
+        title: {type: string}
+        lineCount: {type: integer, minimum: 0}
+        pieceCount: {type: integer, format: int64, minimum: 0}
+        dueAt: {type: string, format: date-time, nullable: true}
         warehouseId: {type: string}
-        operatorId: {type: string, nullable: true}
+        assignedOperatorId: {type: string, nullable: true}
+        lockState: {type: string, enum: [AVAILABLE, OWNED, LOCKED]}
         version: {type: integer, format: int64}
+        createdAt: {type: string, format: date-time}
         updatedAt: {type: string, format: date-time}
     TaskPage:
       type: object
@@ -400,12 +657,51 @@ components:
         count: {type: integer}
     ConfirmReceiptRequest:
       type: object
-      required: [commandId, lineId, barcode, quantity, baseVersion]
+      required: [commandId, lineId, barcode, quantity, condition, baseVersion, scannedAt]
       additionalProperties: false
       properties:
         commandId: {type: string, format: uuid}
+        idempotencyKey: {type: string, format: uuid}
+        taskId: {type: string}
         lineId: {type: string}
         barcode: {type: string}
         quantity: {type: integer, format: int64, minimum: 1}
+        condition: {type: string, enum: [GOOD, DAMAGED, QUARANTINED, UNKNOWN]}
         remark: {type: string, nullable: true, maxLength: 500}
         baseVersion: {type: integer, format: int64}
+        scannedAt: {type: string, format: date-time}
+    ReceivingBarcodeResolveRequest:
+      type: object
+      required: [rawValue, normalizedValue, symbology, scanContext, scannedAt]
+      additionalProperties: false
+      properties:
+        taskId: {type: string}
+        lineId: {type: string, nullable: true}
+        rawValue: {type: string, minLength: 1}
+        normalizedValue: {type: string, minLength: 1}
+        symbology: {type: string, minLength: 1}
+        scanContext: {type: string, enum: [RECEIVING_ITEM]}
+        operatorId: {type: string}
+        warehouseId: {type: string}
+        deviceId: {type: string}
+        scannedAt: {type: string, format: date-time}
+  responses:
+    SuccessEnvelope:
+      description: Successful PDA API response
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/Envelope'}
+    ErrorEnvelope:
+      description: PDA API error response
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/Envelope'}
+    RateLimited:
+      description: Request rate limit exceeded
+      headers:
+        Retry-After:
+          description: Minimum number of seconds before retrying the request
+          schema: {type: integer, format: int32, minimum: 1}
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/Envelope'}

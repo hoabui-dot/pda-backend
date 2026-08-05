@@ -1,4 +1,4 @@
-.PHONY: fmt lint test test-integration test-kafka test-contract test-architecture build verify clean migrate-up migrate-down
+.PHONY: fmt lint test test-integration test-kafka test-contract test-architecture build verify clean migrate-up migrate-down identity-seed-dev
 
 SERVICES := pda-api-gateway identity-access-service pda-execution-service inventory-service outbound-shipping-service integration-event-service
 
@@ -34,6 +34,9 @@ migrate-up:
 
 migrate-down:
 	docker run --rm --network pda-backend_default -v "$(CURDIR)/migrations/execution:/migrations:ro" migrate/migrate:v4.18.3 -path=/migrations -database='postgres://pda:local-only-pda@postgres:5432/pda?sslmode=disable' down 1
+
+identity-seed-dev:
+	go run ./cmd/identity-seed-dev
 
 clean:
 	go clean -testcache
