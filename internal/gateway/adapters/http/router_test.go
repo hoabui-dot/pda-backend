@@ -39,7 +39,7 @@ func setup(t *testing.T, limit int, logger *slog.Logger) http.Handler {
 	}
 	taskStore := executionmemory.New(tasks)
 	taskService := executionapp.NewTaskService(taskStore, executionmemory.Idempotency{Store: taskStore}, taskStore, taskStore, messagingmock.NewPublisher(messagingmock.NewInMemoryEventLog(), ""), taskStore, func() time.Time { return fixedTime })
-	handler, err := New(service, taskService, nil, nil, nil, nil, Settings{RequestTimeout: 100 * time.Millisecond, AuthRateLimit: limit, RateWindow: time.Minute, CircuitFailureThreshold: 3}, logger, func() time.Time { return fixedTime })
+	handler, err := New(service, taskService, nil, nil, nil, nil, nil, Settings{RequestTimeout: 100 * time.Millisecond, AuthRateLimit: limit, RateWindow: time.Minute, CircuitFailureThreshold: 3}, logger, func() time.Time { return fixedTime })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -240,7 +240,7 @@ func TestRateLimitCorrelationTimeoutAndRedactedLogging(t *testing.T) {
 }
 
 func TestInvalidGatewayResilienceSettingsRejected(t *testing.T) {
-	if _, err := New(nil, nil, nil, nil, nil, nil, Settings{}, slog.Default(), time.Now); err == nil {
+	if _, err := New(nil, nil, nil, nil, nil, nil, nil, Settings{}, slog.Default(), time.Now); err == nil {
 		t.Fatal("expected invalid settings rejection")
 	}
 }

@@ -71,7 +71,7 @@ func TestReceivingAPIFromListThroughQuantityConfirmation(t *testing.T) {
 	}
 	log := messagingmock.NewInMemoryEventLog()
 	receivingService := receivingapp.New(receivingStore, receivingpostgres.Commands{Store: receivingStore}, receivingStore, receivingStore, receivingStore, messagingmock.NewPublisher(log, ""), receivingStore, func() time.Time { return fixedTime })
-	handler, err := New(identityService, nil, receivingService, nil, nil, nil, Settings{RequestTimeout: time.Second, AuthRateLimit: 20, RateWindow: time.Minute, CircuitFailureThreshold: 3}, slog.New(slog.NewTextHandler(io.Discard, nil)), func() time.Time { return fixedTime })
+	handler, err := New(identityService, nil, receivingService, nil, nil, nil, nil, Settings{RequestTimeout: time.Second, AuthRateLimit: 20, RateWindow: time.Minute, CircuitFailureThreshold: 3}, slog.New(slog.NewTextHandler(io.Discard, nil)), func() time.Time { return fixedTime })
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -29,7 +29,7 @@ func TestWarehousesMapsApprovedWMSResponse(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(warehouses) != 1 || warehouses[0].ID != "wh-1" || warehouses[0].Name != "Kho 1" {
+	if len(warehouses) != 1 || warehouses[0].ID != "wh-1" || warehouses[0].Code != "WH-01" || warehouses[0].Name != "Kho 1" {
 		t.Fatalf("unexpected mapped warehouses: %+v", warehouses)
 	}
 }

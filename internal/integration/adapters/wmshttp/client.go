@@ -76,7 +76,7 @@ func (c *Client) Warehouses(ctx context.Context) ([]ports.Warehouse, error) {
 		if err != nil {
 			return nil, err
 		}
-		out = append(out, ports.Warehouse{ID: item.ID, Name: name})
+		out = append(out, ports.Warehouse{ID: item.ID, Code: item.Code, Name: name})
 	}
 	return out, nil
 }
