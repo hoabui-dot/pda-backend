@@ -68,6 +68,13 @@ func (a *ReceivingAdapter) Detail(ctx context.Context, id string, actor platform
 	return task, nil
 }
 
+func (a *ReceivingAdapter) Claim(ctx context.Context, command receivingapp.Command) (receivingdomain.Task, error) {
+	if err := a.client.ClaimReceipt(ctx, command.TaskID, command.Actor.OperatorID, command.IdempotencyKey, 900); err != nil {
+		return receivingdomain.Task{}, err
+	}
+	return a.Detail(ctx, command.TaskID, command.Actor)
+}
+
 func (a *ReceivingAdapter) ResolveBarcode(ctx context.Context, taskID, barcode string, actor platform.ActorContext) (receivingdomain.Line, error) {
 	return a.resolveBarcode(ctx, taskID, barcode, "UNKNOWN", actor)
 }

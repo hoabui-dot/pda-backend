@@ -170,6 +170,12 @@ paths:
       security: [{bearerAuth: []}]
       parameters: [{name: taskId, in: path, required: true, schema: {type: string}}]
       responses: {'200': {description: Receiving task and lines}}
+  /receiving/tasks/{taskId}/claim:
+    post:
+      operationId: claimReceivingTask
+      security: [{bearerAuth: []}]
+      parameters: [{name: taskId, in: path, required: true, schema: {type: string}}, {$ref: '#/components/parameters/IdempotencyKey'}, {$ref: '#/components/parameters/IfMatch'}]
+      responses: {'200': {description: Receipt assignment claimed}, '409': {description: Already claimed or version conflict}}
   /receiving/tasks/{taskId}/start:
     post:
       operationId: startReceivingTask

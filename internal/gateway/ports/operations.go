@@ -95,6 +95,7 @@ type ShippingOperations interface {
 type ReceivingOperations interface {
 	List(context.Context, receivingports.Filter, platform.ActorContext) (receivingports.Page, error)
 	Detail(context.Context, string, platform.ActorContext) (receivingdomain.Task, error)
+	Claim(context.Context, receivingapp.Command) (receivingdomain.Task, error)
 	ResolveBarcode(context.Context, string, string, platform.ActorContext) (receivingdomain.Line, error)
 	Start(context.Context, receivingapp.Command) (receivingdomain.Task, error)
 	Confirm(context.Context, receivingapp.ConfirmCommand) (receivingdomain.Task, error)

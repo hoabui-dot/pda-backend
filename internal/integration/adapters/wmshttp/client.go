@@ -180,6 +180,34 @@ func (c *Client) GetReceipt(ctx context.Context, id string) (ports.Receipt, erro
 	return out, nil
 }
 
+func (c *Client) ClaimReceipt(ctx context.Context, id, operatorID, idempotencyKey string, leaseSeconds int) error {
+	body, err := json.Marshal(map[string]any{"operator_id": operatorID, "lease_seconds": leaseSeconds})
+	if err != nil {
+		return fmt.Errorf("encode WMS receipt claim request: %w", err)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+inboundReceiptsPath+"/"+url.PathEscape(id)+"/claim", strings.NewReader(string(body)))
+	if err != nil {
+		return fmt.Errorf("build WMS receipt claim request: %w", err)
+	}
+	c.applyHeaders(req, idempotencyKey)
+	req.Header.Set("X-User-ID", operatorID)
+	req.Header.Set("X-Operator-ID", operatorID)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return fmt.Errorf("WMS receipt claim request: %w", err)
+	}
+	defer resp.Body.Close()
+	payload, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return fmt.Errorf("read WMS receipt claim response: %w", err)
+	}
+	if err := ownerResponseError(resp.StatusCode, payload); err != nil {
+		return err
+	}
+	return nil
+}
+
 func (c *Client) RecordReceiptQuantity(ctx context.Context, receiptID, lineID string, input ports.ReceiptQuantityRequest) (ports.ReceiptQuantityResult, error) {
 	var out ports.ReceiptQuantityResult
 	body, err := json.Marshal(input)

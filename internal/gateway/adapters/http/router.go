@@ -99,6 +99,8 @@ func New(identityService *identityapp.Service, taskService gatewayports.TaskOper
 			protected.With(router.deviceWarehouseContext).Get("/receiving/tasks/{taskId}", router.receivingDetail)
 			protected.With(router.deviceWarehouseContext).Get("/receiving", router.receivingList)
 			protected.With(router.deviceWarehouseContext).Get("/receiving/{taskId}", router.receivingDetail)
+			protected.With(router.deviceWarehouseContext).Post("/receiving/tasks/{taskId}/claim", router.receivingClaim)
+			protected.With(router.deviceWarehouseContext).Post("/receiving/{taskId}/claim", router.receivingClaim)
 			protected.With(router.deviceWarehouseContext).Post("/receiving/tasks/{taskId}/start", router.receivingStart)
 			protected.With(router.deviceWarehouseContext).Post("/receiving/tasks/{taskId}/barcode-resolutions", router.receivingBarcode)
 			protected.With(router.deviceWarehouseContext).Post("/receiving/tasks/{taskId}/receipts", router.receivingConfirm)
@@ -599,6 +601,20 @@ func (r *Router) receivingStart(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	writeData(w, http.StatusOK, task, correlation(req.Context()), r.now())
+}
+
+func (r *Router) receivingClaim(w http.ResponseWriter, req *http.Request) {
+	command, err := r.receivingBaseCommand(req)
+	if err != nil {
+		writeError(w, err, correlation(req.Context()))
+		return
+	}
+	task, err := r.receiving.Claim(req.Context(), command)
+	if err != nil {
+		writeError(w, err, correlation(req.Context()))
+		return
+	}
+	writeData(w, http.StatusOK, receivingView(task), correlation(req.Context()), r.now())
 }
 func (r *Router) receivingBarcode(w http.ResponseWriter, req *http.Request) {
 	var input struct {

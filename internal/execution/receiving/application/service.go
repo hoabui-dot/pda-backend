@@ -63,6 +63,13 @@ func (s *Service) Detail(ctx context.Context, id string, actor platform.ActorCon
 	}
 	return task, nil
 }
+
+// Claim is the receiving workflow boundary. Local mode keeps the existing
+// durable task claim semantics; HTTP mode maps this call to Inbound's receipt
+// assignment claim instead of creating a local business record.
+func (s *Service) Claim(ctx context.Context, command Command) (domain.Task, error) {
+	return s.Start(ctx, command)
+}
 func (s *Service) ResolveBarcode(ctx context.Context, taskID, barcode string, actor platform.ActorContext) (domain.Line, error) {
 	task, err := s.Detail(ctx, taskID, actor)
 	if err != nil {
