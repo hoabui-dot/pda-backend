@@ -55,6 +55,9 @@ func (a *ReceivingAdapter) Detail(ctx context.Context, id string, actor platform
 	if receipt.WarehouseLocationID == "" {
 		return receivingdomain.Task{}, fmt.Errorf("WAREHOUSE_ACCESS_DENIED")
 	}
+	if receipt.AssignedOperatorID != nil && *receipt.AssignedOperatorID != actor.OperatorID {
+		return receivingdomain.Task{}, receivingdomain.ErrNotAssigned
+	}
 	location, err := a.client.Location(ctx, receipt.WarehouseLocationID)
 	if err != nil {
 		return receivingdomain.Task{}, err
@@ -87,10 +90,14 @@ func receiptTaskStatus(status, confirmationStatus, assignmentStatus string) rece
 }
 
 func (a *ReceivingAdapter) Claim(ctx context.Context, command receivingapp.Command) (receivingdomain.Task, error) {
-	if err := a.client.ClaimReceipt(ctx, command.TaskID, command.Actor.OperatorID, command.IdempotencyKey, 900); err != nil {
+	task, err := a.Detail(ctx, command.TaskID, command.Actor)
+	if err != nil {
 		return receivingdomain.Task{}, err
 	}
-	return a.Detail(ctx, command.TaskID, command.Actor)
+	if task.OperatorID == nil || *task.OperatorID != command.Actor.OperatorID {
+		return receivingdomain.Task{}, receivingdomain.ErrNotAssigned
+	}
+	return task, nil
 }
 
 func (a *ReceivingAdapter) ResolveBarcode(ctx context.Context, taskID, barcode string, actor platform.ActorContext) (receivingdomain.Line, error) {
