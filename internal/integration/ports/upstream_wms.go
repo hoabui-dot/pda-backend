@@ -39,12 +39,14 @@ type ReceiptQuery struct {
 }
 
 type ReceiptSummary struct {
-	ReceiptID           string `json:"receipt_id"`
-	ReceiptCode         string `json:"receipt_code"`
-	WarehouseLocationID string `json:"warehouse_location_id"`
-	Status              string `json:"status"`
-	ConfirmationStatus  string `json:"confirmation_status"`
-	LineCount           int    `json:"line_count"`
+	ReceiptID           string  `json:"receipt_id"`
+	ReceiptCode         string  `json:"receipt_code"`
+	WarehouseLocationID string  `json:"warehouse_location_id"`
+	Status              string  `json:"status"`
+	ConfirmationStatus  string  `json:"confirmation_status"`
+	LineCount           int     `json:"line_count"`
+	AssignedOperatorID  *string `json:"assigned_operator_id"`
+	AssignmentStatus    string  `json:"assignment_status"`
 }
 
 type Receipt struct {
@@ -53,6 +55,9 @@ type Receipt struct {
 	WarehouseLocationID string        `json:"warehouse_location_id"`
 	Status              string        `json:"status"`
 	ConfirmationStatus  string        `json:"confirmation_status"`
+	AssignedOperatorID  *string       `json:"assigned_operator_id"`
+	AssignmentStatus    string        `json:"assignment_status"`
+	AssignmentVersion   int64         `json:"assignment_version"`
 	Lines               []ReceiptLine `json:"lines"`
 }
 

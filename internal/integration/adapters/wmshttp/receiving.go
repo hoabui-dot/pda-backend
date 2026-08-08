@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"fmt"
+	"strings"
 	"time"
 
 	receivingapp "github.com/company/pda-backend/internal/execution/receiving/application"
@@ -31,6 +32,9 @@ func (a *ReceivingAdapter) List(ctx context.Context, f receivingports.Filter, ac
 		if row.Status != "Draft" || row.WarehouseLocationID == "" {
 			continue
 		}
+		if row.AssignedOperatorID != nil && *row.AssignedOperatorID != actor.OperatorID {
+			continue
+		}
 		location, err := a.client.Location(ctx, row.WarehouseLocationID)
 		if err != nil {
 			return receivingports.Page{}, err
@@ -38,7 +42,7 @@ func (a *ReceivingAdapter) List(ctx context.Context, f receivingports.Filter, ac
 		if location.WarehouseID != actor.WarehouseID {
 			continue
 		}
-		items = append(items, receivingdomain.Task{ID: row.ReceiptID, OrderID: row.ReceiptID, PONumber: row.ReceiptCode, WarehouseID: actor.WarehouseID, Status: receivingdomain.StatusNew, Version: 1})
+		items = append(items, receivingdomain.Task{ID: row.ReceiptID, OrderID: row.ReceiptID, PONumber: row.ReceiptCode, WarehouseID: actor.WarehouseID, Status: receiptTaskStatus(row.Status, row.ConfirmationStatus, row.AssignmentStatus), OperatorID: row.AssignedOperatorID, Version: 1})
 	}
 	return receivingports.Page{Items: items}, nil
 }
@@ -58,7 +62,11 @@ func (a *ReceivingAdapter) Detail(ctx context.Context, id string, actor platform
 	if location.WarehouseID != actor.WarehouseID {
 		return receivingdomain.Task{}, fmt.Errorf("WAREHOUSE_ACCESS_DENIED")
 	}
-	task := receivingdomain.Task{ID: receipt.ReceiptID, OrderID: receipt.ReceiptID, PONumber: receipt.ReceiptCode, WarehouseID: actor.WarehouseID, Status: receivingdomain.StatusNew, Version: 1, UpdatedAt: time.Now().UTC()}
+	version := receipt.AssignmentVersion
+	if version < 1 {
+		version = 1
+	}
+	task := receivingdomain.Task{ID: receipt.ReceiptID, OrderID: receipt.ReceiptID, PONumber: receipt.ReceiptCode, WarehouseID: actor.WarehouseID, Status: receiptTaskStatus(receipt.Status, receipt.ConfirmationStatus, receipt.AssignmentStatus), OperatorID: receipt.AssignedOperatorID, Version: version, UpdatedAt: time.Now().UTC()}
 	for _, line := range receipt.Lines {
 		if line.LineID == "" {
 			continue
@@ -66,6 +74,16 @@ func (a *ReceivingAdapter) Detail(ctx context.Context, id string, actor platform
 		task.Lines = append(task.Lines, receivingdomain.Line{ID: line.LineID, ItemID: line.ItemRevisionID, Barcode: line.ItemRevisionID, ExpectedQuantity: int64(line.Expected), ReceivedQuantity: int64(line.ReceivedQuantity), SKU: line.ItemRevisionID})
 	}
 	return task, nil
+}
+
+func receiptTaskStatus(status, confirmationStatus, assignmentStatus string) receivingdomain.Status {
+	if strings.EqualFold(confirmationStatus, "CONFIRMED") || strings.EqualFold(status, "CONFIRMED") {
+		return receivingdomain.StatusCompleted
+	}
+	if strings.EqualFold(assignmentStatus, "CLAIMED") || strings.EqualFold(assignmentStatus, "IN_PROGRESS") {
+		return receivingdomain.StatusInProgress
+	}
+	return receivingdomain.StatusNew
 }
 
 func (a *ReceivingAdapter) Claim(ctx context.Context, command receivingapp.Command) (receivingdomain.Task, error) {
