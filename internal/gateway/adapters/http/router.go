@@ -16,16 +16,14 @@ import (
 
 	executionapp "github.com/company/pda-backend/internal/execution/application"
 	executiondomain "github.com/company/pda-backend/internal/execution/domain"
-	movementapp "github.com/company/pda-backend/internal/execution/movement/application"
 	executionports "github.com/company/pda-backend/internal/execution/ports"
 	receivingapp "github.com/company/pda-backend/internal/execution/receiving/application"
 	receivingdomain "github.com/company/pda-backend/internal/execution/receiving/domain"
 	receivingports "github.com/company/pda-backend/internal/execution/receiving/ports"
+	gatewayports "github.com/company/pda-backend/internal/gateway/ports"
 	identityapp "github.com/company/pda-backend/internal/identity/application"
 	identity "github.com/company/pda-backend/internal/identity/domain"
-	inventoryapp "github.com/company/pda-backend/internal/inventory/application"
 	platform "github.com/company/pda-backend/internal/platform/domain"
-	shippingapp "github.com/company/pda-backend/internal/shipping/application"
 	"github.com/company/pda-backend/internal/wmstask"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -46,25 +44,28 @@ func (s Settings) Validate() error {
 }
 
 type Router struct {
-	identity  *identityapp.Service
-	tasks     *executionapp.TaskService
-	receiving *receivingapp.Service
-	movements *movementapp.Services
-	inventory *inventoryapp.Service
-	shipping  *shippingapp.Service
-	wmsTasks  *wmstask.Service
-	settings  Settings
-	limiter   *rateLimiter
-	logger    *slog.Logger
-	now       func() time.Time
-	breaker   *gatewayBreaker
+	identity         *identityapp.Service
+	tasks            gatewayports.TaskOperations
+	receiving        gatewayports.ReceivingOperations
+	putaway          gatewayports.PutawayOperations
+	picking          gatewayports.PickingOperations
+	replenishment    gatewayports.ReplenishmentOperations
+	movementCommands gatewayports.MovementCommandOperations
+	inventory        gatewayports.InventoryOperations
+	shipping         gatewayports.ShippingOperations
+	wmsTasks         *wmstask.Service
+	settings         Settings
+	limiter          *rateLimiter
+	logger           *slog.Logger
+	now              func() time.Time
+	breaker          *gatewayBreaker
 }
 
-func New(identityService *identityapp.Service, taskService *executionapp.TaskService, receivingService *receivingapp.Service, movementServices *movementapp.Services, inventoryService *inventoryapp.Service, shippingService *shippingapp.Service, wmsTaskService *wmstask.Service, settings Settings, logger *slog.Logger, now func() time.Time) (http.Handler, error) {
+func New(identityService *identityapp.Service, taskService gatewayports.TaskOperations, receivingService gatewayports.ReceivingOperations, putaway gatewayports.PutawayOperations, picking gatewayports.PickingOperations, replenishment gatewayports.ReplenishmentOperations, movementCommands gatewayports.MovementCommandOperations, inventoryService gatewayports.InventoryOperations, shippingService gatewayports.ShippingOperations, wmsTaskService *wmstask.Service, settings Settings, logger *slog.Logger, now func() time.Time) (http.Handler, error) {
 	if err := settings.Validate(); err != nil {
 		return nil, err
 	}
-	router := &Router{identity: identityService, tasks: taskService, receiving: receivingService, movements: movementServices, inventory: inventoryService, shipping: shippingService, wmsTasks: wmsTaskService, settings: settings, limiter: newRateLimiter(settings.AuthRateLimit, settings.RateWindow, now), logger: logger, now: now, breaker: newGatewayBreaker(settings.CircuitFailureThreshold, settings.RateWindow, now)}
+	router := &Router{identity: identityService, tasks: taskService, receiving: receivingService, putaway: putaway, picking: picking, replenishment: replenishment, movementCommands: movementCommands, inventory: inventoryService, shipping: shippingService, wmsTasks: wmsTaskService, settings: settings, limiter: newRateLimiter(settings.AuthRateLimit, settings.RateWindow, now), logger: logger, now: now, breaker: newGatewayBreaker(settings.CircuitFailureThreshold, settings.RateWindow, now)}
 	r := chi.NewRouter()
 	r.Use(router.correlation, router.locale, router.logging, router.circuitBreak)
 	r.Get("/healthz", router.operational)
@@ -86,13 +87,14 @@ func New(identityService *identityapp.Service, taskService *executionapp.TaskSer
 			protected.With(router.deviceWarehouseContext).Get("/tasks/{taskId}", router.taskDetail)
 			protected.With(router.deviceWarehouseContext).Post("/tasks/{taskId}/claim", router.claimTask)
 			protected.With(router.deviceWarehouseContext).Post("/tasks/{taskId}/release", router.releaseTask)
-			// I-08: warehouse tasks dispatched by WMS over Kafka. The operator
-			// executes them here; the confirmed result goes back to WMS as a
-			// fact, and WMS applies the inventory transaction.
-			protected.With(router.deviceWarehouseContext).Mount("/wms-tasks", router.wmsTasks.Routes(func(req *http.Request) wmstask.Actor {
-				actor := router.actor(req)
-				return wmstask.Actor{OperatorID: actor.OperatorID, DeviceID: actor.DeviceID, WarehouseID: actor.WarehouseID, CorrelationID: actor.CorrelationID}
-			}))
+			// WMS task routes are local projection wiring in mock mode. HTTP
+			// mode leaves them absent until their remote contract is mapped.
+			if router.wmsTasks != nil {
+				protected.With(router.deviceWarehouseContext).Mount("/wms-tasks", router.wmsTasks.Routes(func(req *http.Request) wmstask.Actor {
+					actor := router.actor(req)
+					return wmstask.Actor{OperatorID: actor.OperatorID, DeviceID: actor.DeviceID, WarehouseID: actor.WarehouseID, CorrelationID: actor.CorrelationID}
+				}))
+			}
 			protected.With(router.deviceWarehouseContext).Get("/receiving/tasks", router.receivingList)
 			protected.With(router.deviceWarehouseContext).Get("/receiving/tasks/{taskId}", router.receivingDetail)
 			protected.With(router.deviceWarehouseContext).Get("/receiving", router.receivingList)
@@ -120,6 +122,8 @@ func New(identityService *identityapp.Service, taskService *executionapp.TaskSer
 			protected.With(router.deviceWarehouseContext).Get("/picking/tasks/{taskId}", router.pickingDetail)
 			protected.With(router.deviceWarehouseContext).Get("/picking", router.pickingList)
 			protected.With(router.deviceWarehouseContext).Get("/picking/{taskId}", router.pickingDetail)
+			protected.With(router.deviceWarehouseContext).Post("/picking/tasks/{taskId}/allocation", router.pickingAllocate)
+			protected.With(router.deviceWarehouseContext).Post("/picking/{taskId}/allocate", router.pickingAllocate)
 			protected.With(router.deviceWarehouseContext).Post("/picking/tasks/{taskId}/location-validations", router.pickingLocation)
 			protected.With(router.deviceWarehouseContext).Post("/picking/{taskId}/validate-location", router.pickingLocation)
 			protected.With(router.deviceWarehouseContext).Post("/picking/tasks/{taskId}/barcode-resolutions", router.pickingBarcode)
@@ -631,7 +635,17 @@ func (r *Router) receivingBarcode(w http.ResponseWriter, req *http.Request) {
 		writeError(w, &platform.DomainError{Code: "INVALID_REQUEST", SafeMessage: "Scanner context does not match the request headers"}, correlation(req.Context()))
 		return
 	}
-	line, err := r.receiving.ResolveBarcode(req.Context(), chi.URLParam(req, "taskId"), barcode, actor)
+	var line receivingdomain.Line
+	var err error
+	if resolver, ok := r.receiving.(gatewayports.ReceivingBarcodeOperations); ok {
+		symbology := strings.ToUpper(strings.TrimSpace(input.Symbology))
+		if symbology == "" {
+			symbology = "UNKNOWN"
+		}
+		line, err = resolver.ResolveBarcodeWithSymbology(req.Context(), chi.URLParam(req, "taskId"), barcode, symbology, actor)
+	} else {
+		line, err = r.receiving.ResolveBarcode(req.Context(), chi.URLParam(req, "taskId"), barcode, actor)
+	}
 	if err != nil {
 		writeError(w, err, correlation(req.Context()))
 		return
@@ -725,8 +739,8 @@ func (r *Router) commandStatus(w http.ResponseWriter, req *http.Request) {
 			return
 		}
 	}
-	if r.movements != nil {
-		if status, lookupErr := r.movements.CommandStatus(req.Context(), id, actor); lookupErr == nil {
+	if r.movementCommands != nil {
+		if status, lookupErr := r.movementCommands.CommandStatus(req.Context(), id, actor); lookupErr == nil {
 			writeData(w, http.StatusOK, canonicalCommand(id, string(status.Workflow), "ACKNOWLEDGED", status.Result), correlation(req.Context()), r.now())
 			return
 		} else if !commandLookupMiss(lookupErr) {
@@ -846,11 +860,11 @@ func writeError(w http.ResponseWriter, err error, correlationID string) {
 		status = http.StatusTooManyRequests
 	case "GATEWAY_CIRCUIT_OPEN", "UPSTREAM_WMS_UNAVAILABLE", "MESSAGING_PUBLISH_PENDING":
 		status = http.StatusServiceUnavailable
-	case "TASK_LOCKED", "TASK_VERSION_CONFLICT", "SHIPMENT_VERSION_CONFLICT", "DUPLICATE_COMMAND", "IDEMPOTENCY_KEY_REUSED":
+	case "TASK_LOCKED", "TASK_VERSION_CONFLICT", "SHIPMENT_VERSION_CONFLICT", "DUPLICATE_COMMAND", "IDEMPOTENCY_KEY_REUSED", "VERSION_CONFLICT", "IDEMPOTENCY_CONFLICT", "RECEIPT_NOT_CONFIRMABLE", "OVER_RECEIPT_APPROVAL_REQUIRED":
 		status = http.StatusConflict
 	case "TASK_NOT_FOUND", "INVENTORY_NOT_FOUND", "SHIPMENT_NOT_FOUND", "COMMAND_NOT_FOUND":
 		status = http.StatusNotFound
-	case "BARCODE_UNKNOWN", "BARCODE_WRONG_CONTEXT", "QUANTITY_EXCEEDS_ALLOWED", "REMARK_REQUIRED", "CONDITION_INVALID", "RECEIVING_TASK_INCOMPLETE", "TASK_NOT_ASSIGNED", "TASK_ALREADY_COMPLETED", "SOURCE_LOCATION_INVALID", "DESTINATION_LOCATION_INVALID", "ITEM_INVALID", "VALIDATION_SEQUENCE_INVALID", "INSUFFICIENT_STOCK", "LOCATION_CAPACITY_EXCEEDED", "TASK_INCOMPLETE", "SOURCE_EQUALS_DESTINATION", "SHIPMENT_NOT_READY", "PACKAGE_INCOMPLETE", "CARRIER_INVALID", "TRACKING_INVALID", "SHIPMENT_ALREADY_CONFIRMED", "COUNT_VARIANCE_REQUIRES_REVIEW", "ITEM_NOT_IN_DOCUMENT", "LOCATION_INVALID":
+	case "BARCODE_UNKNOWN", "BARCODE_WRONG_CONTEXT", "QUANTITY_EXCEEDS_ALLOWED", "REMARK_REQUIRED", "CONDITION_INVALID", "RECEIVING_TASK_INCOMPLETE", "TASK_NOT_ASSIGNED", "TASK_ALREADY_COMPLETED", "SOURCE_LOCATION_INVALID", "DESTINATION_LOCATION_INVALID", "ITEM_INVALID", "VALIDATION_SEQUENCE_INVALID", "INSUFFICIENT_STOCK", "LOCATION_CAPACITY_EXCEEDED", "TASK_INCOMPLETE", "SOURCE_EQUALS_DESTINATION", "SHIPMENT_NOT_READY", "PACKAGE_INCOMPLETE", "CARRIER_INVALID", "TRACKING_INVALID", "SHIPMENT_ALREADY_CONFIRMED", "COUNT_VARIANCE_REQUIRES_REVIEW", "ITEM_NOT_IN_DOCUMENT", "LOCATION_INVALID", "RECEIPT_LINE_MISMATCH", "RECEIPT_QUANTITY_INVALID":
 		status = http.StatusUnprocessableEntity
 	}
 	w.Header().Set("Content-Type", "application/json")

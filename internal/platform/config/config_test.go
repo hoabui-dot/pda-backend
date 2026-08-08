@@ -16,7 +16,7 @@ func TestProductionRejectsEveryMockMode(t *testing.T) {
 }
 
 func TestProductionAcceptsRealModes(t *testing.T) {
-	config := Config{Environment: "production", UpstreamWMSBaseURL: "https://wms.example.test", UpstreamWMSToken: "token", Modes: Modes{Messaging: "kafka", UpstreamWMS: "http", Auth: "oidc"}}
+	config := Config{Environment: "production", UpstreamWMSBaseURL: "https://wms.example.test", UpstreamWMSToken: "token", UpstreamWMSServiceToken: "service-token", Modes: Modes{Messaging: "kafka", UpstreamWMS: "http", Auth: "oidc"}}
 	if err := config.Validate(); err != nil {
 		t.Fatal(err)
 	}
@@ -32,6 +32,10 @@ func TestHTTPWMSRequiresConnectionSettings(t *testing.T) {
 		t.Fatal("expected HTTP WMS bearer token to be required")
 	}
 	config.UpstreamWMSToken = "token"
+	if err := config.Validate(); err == nil {
+		t.Fatal("expected upstream WMS service token to be required")
+	}
+	config.UpstreamWMSServiceToken = "service-token"
 	if err := config.Validate(); err != nil {
 		t.Fatal(err)
 	}

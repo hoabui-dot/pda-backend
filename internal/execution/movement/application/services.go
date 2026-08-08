@@ -85,6 +85,12 @@ func (s *PutawayService) Detail(c context.Context, id string, a platform.ActorCo
 func (s *PickingService) Detail(c context.Context, id string, a platform.ActorContext) (domain.Task, error) {
 	return detail(c, s.d, domain.Picking, id, a)
 }
+
+// Allocate is a compatibility no-op for the local test composition. The
+// production HTTP adapter delegates allocation to WMS/Inventory authority.
+func (s *PickingService) Allocate(c context.Context, x Command) (domain.Task, error) {
+	return s.Detail(c, x.TaskID, x.Actor)
+}
 func (s *ReplenishmentService) Detail(c context.Context, id string, a platform.ActorContext) (domain.Task, error) {
 	return detail(c, s.d, domain.Replenishment, id, a)
 }

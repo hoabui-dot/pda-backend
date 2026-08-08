@@ -17,6 +17,7 @@ type transferInput struct {
 	SourceLocation      string    `json:"sourceLocation"`
 	DestinationLocation string    `json:"destinationLocation"`
 	ItemID              string    `json:"itemId"`
+	LotID               string    `json:"lotId"`
 	Quantity            int64     `json:"quantity"`
 	LotNumber           string    `json:"lotNumber"`
 	SerialNumber        string    `json:"serialNumber"`
@@ -88,7 +89,7 @@ func (r *Router) transferValidation(w http.ResponseWriter, q *http.Request) {
 		r.movementResponse(w, q, nil, e)
 		return
 	}
-	e := r.inventory.ValidateTransfer(q.Context(), inventoryapp.TransferCommand{Source: x.SourceLocation, Destination: x.DestinationLocation, Item: x.ItemID, Quantity: x.Quantity, Command: inventoryapp.Command{Actor: r.actor(q)}})
+	e := r.inventory.ValidateTransfer(q.Context(), inventoryapp.TransferCommand{Source: x.SourceLocation, Destination: x.DestinationLocation, Item: x.ItemID, LotID: x.LotID, Quantity: x.Quantity, Command: inventoryapp.Command{Actor: r.actor(q)}})
 	r.movementResponse(w, q, map[string]any{"valid": e == nil}, e)
 }
 func (r *Router) transferSource(w http.ResponseWriter, q *http.Request) { r.transferValidation(w, q) }
@@ -130,7 +131,7 @@ func (r *Router) transferConfirm(w http.ResponseWriter, q *http.Request) {
 		r.movementResponse(w, q, nil, &platform.DomainError{Code: "INVALID_REQUEST", SafeMessage: "Transfer command metadata does not match headers"})
 		return
 	}
-	v, e := r.inventory.Transfer(q.Context(), inventoryapp.TransferCommand{Command: c, Source: x.SourceLocation, Destination: x.DestinationLocation, Item: x.ItemID, Quantity: x.Quantity})
+	v, e := r.inventory.Transfer(q.Context(), inventoryapp.TransferCommand{Command: c, Source: x.SourceLocation, Destination: x.DestinationLocation, Item: x.ItemID, LotID: x.LotID, Quantity: x.Quantity})
 	r.movementResponse(w, q, v, e)
 }
 

@@ -21,6 +21,15 @@ services:
       timeout: 3s
       retries: 10
 
+  migrations:
+    image: migrate/migrate:v4.18.3
+    command: ["-path=/migrations", "-database=postgres://pda:local-only-pda@postgres:5432/pda?sslmode=disable", "up"]
+    volumes:
+      - ../migrations/execution:/migrations:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+
   pda-api-gateway:
     build:
       context: ..
@@ -40,12 +49,19 @@ services:
       PDA_KAFKA_GROUP_ID: ${PDA_GATEWAY_KAFKA_GROUP_ID:-pda-backend-gateway-v1}
       PDA_KAFKA_TOPIC_PREFIX: pda
       PDA_UPSTREAM_WMS_MODE: ${PDA_UPSTREAM_WMS_MODE:-mock}
+      # Required when PDA_UPSTREAM_WMS_MODE=http. Empty defaults preserve
+      # local mock mode while application validation rejects incomplete HTTP mode.
+      PDA_UPSTREAM_WMS_BASE_URL: ${PDA_UPSTREAM_WMS_BASE_URL:-}
+      PDA_UPSTREAM_WMS_TOKEN: ${PDA_UPSTREAM_WMS_TOKEN:-}
+      PDA_UPSTREAM_WMS_SERVICE_TOKEN: ${PDA_UPSTREAM_WMS_SERVICE_TOKEN:-}
     depends_on:
       postgres:
         condition: service_healthy
+      migrations:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
-    networks: [default, platform]
+    networks: [default, platform, wms-internal]
 
   # I-08: consumes WMS.PDA.WarehouseTask*.v1 and relays the PDA outbox. It is
   # the only PDA process that talks to Kafka, and it must run in kafka mode —
@@ -68,9 +84,13 @@ services:
       PDA_KAFKA_TOPIC_PREFIX: pda
       PDA_WMS_TASK_GROUP_ID: ${PDA_WMS_TASK_GROUP_ID:-pda-backend-wms-tasks-v1}
       PDA_WMS_TASK_TOPICS: ${PDA_WMS_TASK_TOPICS:-WMS.PDA.WarehouseTaskCreated.v1,WMS.PDA.WarehouseTaskUpdated.v1,WMS.PDA.WarehouseTaskCancelled.v1}
+      PDA_WMS_INBOUND_TOPIC: ${PDA_WMS_INBOUND_TOPIC:-WMS.Inbound.ReceiptConfirmed.v1}
+      PDA_WMS_INBOUND_GROUP_ID: ${PDA_WMS_INBOUND_GROUP_ID:-pda-backend-wms-inbound-v1}
     depends_on:
       postgres:
         condition: service_healthy
+      migrations:
+        condition: service_completed_successfully
     networks: [default, platform]
 
 # Kafka is provided by the shared MES platform. PDA must not start a second
@@ -80,3 +100,6 @@ networks:
   platform:
     external: true
     name: ${PDA_PLATFORM_NETWORK_NAME:-platform-net}
+  wms-internal:
+    external: true
+    name: ${PDA_WMS_INTERNAL_NETWORK_NAME:-wms-internal}

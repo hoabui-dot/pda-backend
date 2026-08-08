@@ -70,6 +70,17 @@ func runKafka(applicationConfig config.Config) error {
 	taskConsumer.Start()
 	defer taskConsumer.Stop()
 	slog.Info("WMS task consumer started", "group", applicationConfig.WMSTaskGroupID, "topics", applicationConfig.WMSTaskTopics)
+	receiptConsumer, err := kafkaadapter.NewInboundReceiptConsumer(brokers, applicationConfig.WMSInboundGroupID, pool, applicationConfig.WMSInboundTopic)
+	if err != nil {
+		return err
+	}
+	go func() {
+		if err := receiptConsumer.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
+			slog.Error("inbound receipt consumer stopped", "error", err)
+		}
+	}()
+	defer receiptConsumer.Close()
+	slog.Info("WMS inbound receipt consumer started", "group", applicationConfig.WMSInboundGroupID, "topic", applicationConfig.WMSInboundTopic)
 
 	// I-08 (outbound): relay the cross-system outbox. These rows carry the
 	// canonical snake_case envelope on absolute topics and must not be

@@ -23,6 +23,7 @@ import (
 	identityports "github.com/company/pda-backend/internal/identity/ports"
 	kafkaadapter "github.com/company/pda-backend/internal/integration/adapters/kafka"
 	messagingmock "github.com/company/pda-backend/internal/integration/adapters/messagingmock"
+	wmshttp "github.com/company/pda-backend/internal/integration/adapters/wmshttp"
 	wmsmock "github.com/company/pda-backend/internal/integration/adapters/wmsmock"
 	inventorypostgres "github.com/company/pda-backend/internal/inventory/adapters/postgres"
 	inventoryredis "github.com/company/pda-backend/internal/inventory/adapters/rediscache"
@@ -47,15 +48,6 @@ func main() {
 	}
 	if applicationConfig.Modes.Auth != "internal" {
 		slog.Error("gateway runtime requires backend-owned internal authentication")
-		os.Exit(1)
-	}
-	if applicationConfig.Modes.UpstreamWMS != "mock" {
-		slog.Error("upstream WMS adapter is not enabled; provide the approved WMS contract before selecting HTTP mode")
-		os.Exit(1)
-	}
-	tasks, err := wmsmock.NewTaskAdapter().Tasks(context.Background())
-	if err != nil {
-		slog.Error("task fixture rejected", "error", err)
 		os.Exit(1)
 	}
 	pool, err := pgxpool.New(context.Background(), applicationConfig.DatabaseURL)
@@ -91,6 +83,33 @@ func main() {
 		os.Exit(1)
 	}
 	identityService := identityapp.NewProductionService(identityStore, nil, identityStore, identityStore, identitysecurity.DefaultArgon2id(), sessions, time.Now)
+	if applicationConfig.Modes.UpstreamWMS != "mock" {
+		client, clientErr := wmshttp.New(applicationConfig.UpstreamWMSBaseURL, applicationConfig.UpstreamWMSToken, nil)
+		if clientErr != nil {
+			slog.Error("WMS HTTP adapter configuration rejected", "error", clientErr)
+			os.Exit(1)
+		}
+		receivingRemote := wmshttp.NewReceivingAdapter(client)
+		_, _, _, _, movementRemote, _, _ := wmshttp.NewUnavailableAdapters()
+		taskRemote := wmshttp.NewTaskAdapter(client)
+		inventoryRemote := wmshttp.NewInventoryAdapter(client)
+		shippingRemote := wmshttp.NewShippingAdapter(client)
+		putawayRemote := wmshttp.NewPutawayAdapter(client)
+		pickingRemote := wmshttp.NewPickingAdapter(client)
+		replenishmentRemote := wmshttp.NewReplenishmentAdapter(client)
+		handler, handlerErr := httpadapter.New(identityService, taskRemote, receivingRemote, putawayRemote, pickingRemote, replenishmentRemote, movementRemote, inventoryRemote, shippingRemote, nil, httpadapter.Settings{RequestTimeout: 5 * time.Second, AuthRateLimit: 10, RateWindow: time.Minute, CircuitFailureThreshold: 5}, slog.Default(), time.Now)
+		if handlerErr != nil {
+			slog.Error("HTTP WMS gateway composition rejected", "error", handlerErr)
+			os.Exit(1)
+		}
+		runServer(handler)
+		return
+	}
+	tasks, err := wmsmock.NewTaskAdapter().Tasks(context.Background())
+	if err != nil {
+		slog.Error("task fixture rejected", "error", err)
+		os.Exit(1)
+	}
 	redisOptions, err := redis.ParseURL(applicationConfig.RedisURL)
 	if err != nil {
 		slog.Error("redis configuration rejected", "error", err)
@@ -163,11 +182,15 @@ func main() {
 	cachedShipping := shippingredis.New(shippingStore, cacheAside, cacheKeys)
 	shippingService := shippingapp.New(cachedShipping, shippingpostgres.Commands{Store: shippingStore}, shippingStore, shippingStore, shippingStore, publisher, cacheInvalidator, time.Now)
 	wmsTaskService := wmstask.New(pool, time.Now)
-	handler, err := httpadapter.New(identityService, taskService, receivingService, movementServices, inventoryService, shippingService, wmsTaskService, httpadapter.Settings{RequestTimeout: 5 * time.Second, AuthRateLimit: 10, RateWindow: time.Minute, CircuitFailureThreshold: 5}, slog.Default(), time.Now)
+	handler, err := httpadapter.New(identityService, taskService, receivingService, movementServices.Putaway, movementServices.Picking, movementServices.Replenishment, movementServices, inventoryService, shippingService, wmsTaskService, httpadapter.Settings{RequestTimeout: 5 * time.Second, AuthRateLimit: 10, RateWindow: time.Minute, CircuitFailureThreshold: 5}, slog.Default(), time.Now)
 	if err != nil {
 		slog.Error("gateway configuration rejected", "error", err)
 		os.Exit(1)
 	}
+	runServer(handler)
+}
+
+func runServer(handler http.Handler) {
 	server := &http.Server{Addr: ":8080", Handler: handler, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: 10 * time.Second, IdleTimeout: 60 * time.Second}
 	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		slog.Error("gateway stopped", "error", err)

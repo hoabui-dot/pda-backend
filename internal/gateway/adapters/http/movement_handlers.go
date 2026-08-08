@@ -187,53 +187,62 @@ func (r *Router) movementConfirm(w http.ResponseWriter, q *http.Request, f func(
 	r.movementResponse(w, q, out, e)
 }
 func (r *Router) putawayList(w http.ResponseWriter, q *http.Request) {
-	v, e := r.movements.Putaway.List(q.Context(), r.actor(q))
+	v, e := r.putaway.List(q.Context(), r.actor(q))
 	r.movementResponse(w, q, v, e)
 }
 func (r *Router) putawayDetail(w http.ResponseWriter, q *http.Request) {
-	v, e := r.movements.Putaway.Detail(q.Context(), chi.URLParam(q, "taskId"), r.actor(q))
+	v, e := r.putaway.Detail(q.Context(), chi.URLParam(q, "taskId"), r.actor(q))
 	r.movementResponse(w, q, v, e)
 }
 func (r *Router) putawaySuggestions(w http.ResponseWriter, q *http.Request) {
-	v, e := r.movements.Putaway.Suggestions(q.Context(), chi.URLParam(q, "taskId"), r.actor(q))
+	v, e := r.putaway.Suggestions(q.Context(), chi.URLParam(q, "taskId"), r.actor(q))
 	r.movementResponse(w, q, v, e)
 }
 func (r *Router) putawaySource(w http.ResponseWriter, q *http.Request) {
 	r.movementValidation(w, q, func(c movementapp.Command, v string) (movementdomain.Task, error) {
-		return r.movements.Putaway.ValidateSource(q.Context(), c, v)
+		return r.putaway.ValidateSource(q.Context(), c, v)
 	})
 }
 func (r *Router) putawayDestination(w http.ResponseWriter, q *http.Request) {
 	r.movementValidation(w, q, func(c movementapp.Command, v string) (movementdomain.Task, error) {
-		return r.movements.Putaway.ValidateDestination(q.Context(), c, v)
+		return r.putaway.ValidateDestination(q.Context(), c, v)
 	})
 }
 func (r *Router) putawayConfirm(w http.ResponseWriter, q *http.Request) {
 	r.movementConfirm(w, q, func(c movementapp.Command, v int64) (movementdomain.Task, error) {
-		return r.movements.Putaway.Confirm(q.Context(), c, v)
+		return r.putaway.Confirm(q.Context(), c, v)
 	})
 }
 func (r *Router) pickingList(w http.ResponseWriter, q *http.Request) {
-	v, e := r.movements.Picking.List(q.Context(), r.actor(q))
+	v, e := r.picking.List(q.Context(), r.actor(q))
 	r.movementResponse(w, q, v, e)
 }
 func (r *Router) pickingDetail(w http.ResponseWriter, q *http.Request) {
-	v, e := r.movements.Picking.Detail(q.Context(), chi.URLParam(q, "taskId"), r.actor(q))
+	v, e := r.picking.Detail(q.Context(), chi.URLParam(q, "taskId"), r.actor(q))
+	r.movementResponse(w, q, v, e)
+}
+func (r *Router) pickingAllocate(w http.ResponseWriter, q *http.Request) {
+	c, e := r.movementCommand(q)
+	if e != nil {
+		r.movementResponse(w, q, nil, e)
+		return
+	}
+	v, e := r.picking.Allocate(q.Context(), c)
 	r.movementResponse(w, q, v, e)
 }
 func (r *Router) pickingLocation(w http.ResponseWriter, q *http.Request) {
 	r.movementValidation(w, q, func(c movementapp.Command, v string) (movementdomain.Task, error) {
-		return r.movements.Picking.ValidateLocation(q.Context(), c, v)
+		return r.picking.ValidateLocation(q.Context(), c, v)
 	})
 }
 func (r *Router) pickingBarcode(w http.ResponseWriter, q *http.Request) {
 	r.movementValidation(w, q, func(c movementapp.Command, v string) (movementdomain.Task, error) {
-		return r.movements.Picking.ResolveBarcode(q.Context(), c, v)
+		return r.picking.ResolveBarcode(q.Context(), c, v)
 	})
 }
 func (r *Router) pickingConfirm(w http.ResponseWriter, q *http.Request) {
 	r.movementConfirm(w, q, func(c movementapp.Command, v int64) (movementdomain.Task, error) {
-		return r.movements.Picking.Confirm(q.Context(), c, v)
+		return r.picking.Confirm(q.Context(), c, v)
 	})
 }
 func (r *Router) pickingComplete(w http.ResponseWriter, q *http.Request) {
@@ -242,34 +251,34 @@ func (r *Router) pickingComplete(w http.ResponseWriter, q *http.Request) {
 		r.movementResponse(w, q, nil, e)
 		return
 	}
-	v, e := r.movements.Picking.Complete(q.Context(), c)
+	v, e := r.picking.Complete(q.Context(), c)
 	r.movementResponse(w, q, v, e)
 }
 func (r *Router) replenishmentList(w http.ResponseWriter, q *http.Request) {
-	v, e := r.movements.Replenishment.List(q.Context(), r.actor(q))
+	v, e := r.replenishment.List(q.Context(), r.actor(q))
 	r.movementResponse(w, q, v, e)
 }
 func (r *Router) replenishmentDetail(w http.ResponseWriter, q *http.Request) {
-	v, e := r.movements.Replenishment.Detail(q.Context(), chi.URLParam(q, "taskId"), r.actor(q))
+	v, e := r.replenishment.Detail(q.Context(), chi.URLParam(q, "taskId"), r.actor(q))
 	r.movementResponse(w, q, v, e)
 }
 func (r *Router) replenishmentSource(w http.ResponseWriter, q *http.Request) {
 	r.movementValidation(w, q, func(c movementapp.Command, v string) (movementdomain.Task, error) {
-		return r.movements.Replenishment.ValidateSource(q.Context(), c, v)
+		return r.replenishment.ValidateSource(q.Context(), c, v)
 	})
 }
 func (r *Router) replenishmentDestination(w http.ResponseWriter, q *http.Request) {
 	r.movementValidation(w, q, func(c movementapp.Command, v string) (movementdomain.Task, error) {
-		return r.movements.Replenishment.ValidateDestination(q.Context(), c, v)
+		return r.replenishment.ValidateDestination(q.Context(), c, v)
 	})
 }
 func (r *Router) replenishmentItem(w http.ResponseWriter, q *http.Request) {
 	r.movementValidation(w, q, func(c movementapp.Command, v string) (movementdomain.Task, error) {
-		return r.movements.Replenishment.ValidateItem(q.Context(), c, v)
+		return r.replenishment.ValidateItem(q.Context(), c, v)
 	})
 }
 func (r *Router) replenishmentConfirm(w http.ResponseWriter, q *http.Request) {
 	r.movementConfirm(w, q, func(c movementapp.Command, v int64) (movementdomain.Task, error) {
-		return r.movements.Replenishment.Confirm(q.Context(), c, v)
+		return r.replenishment.Confirm(q.Context(), c, v)
 	})
 }

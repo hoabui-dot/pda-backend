@@ -35,8 +35,8 @@ type Command struct {
 }
 type TransferCommand struct {
 	Command
-	Source, Destination, Item string
-	Quantity                  int64
+	Source, Destination, Item, LotID string
+	Quantity                         int64
 }
 
 func (s *Service) Search(c context.Context, q string, a platform.ActorContext) ([]domain.Balance, error) {

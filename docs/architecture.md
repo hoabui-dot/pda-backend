@@ -64,10 +64,19 @@ Kafka delivery is configuration-gated and fail-closed. `PDA_MESSAGING_MODE=mock`
 
 ## BE-09 WMS integration boundary
 
-The upstream WMS contract is not yet approved in this repository. `PDA_UPSTREAM_WMS_MODE=mock`
-therefore remains the only operational gateway mode, backed by deterministic fixture adapters. The
-gateway fails fast when `PDA_UPSTREAM_WMS_MODE=http` is selected; it never silently seeds or serves
-mock WMS data under an HTTP integration profile. The `UpstreamWMS` port, mock adapter, cache-aside
-wrapper, and resilience policy are ready for contract-driven implementation. WMS endpoint, event,
-authentication, mapping, checkpoint, replay, and reconciliation behavior remain deferred until the
-approved upstream ownership contract and staging environment are supplied.
+The upstream WMS contract is partially mapped from current owner APIs. Read-only
+warehouse, location, and existing-receipt adapter contracts are covered by
+transport tests. The receiving HTTP adapter now implements the gateway-level
+`ReceivingOperations` port and maps discovery, detail, quantity recording, and
+confirmation to existing Inbound receipt contracts. It validates receipt
+location ownership through Master Data and uses the authoritative receipt-line
+version for quantity commands; it never creates a receipt.
+
+Generic tasks, movement, inventory, and shipping handlers now depend on
+gateway-level use-case ports as well. Their local application services remain
+the mock/test implementations of those ports, while HTTP mode composes remote
+WMS adapters and never seeds or serves PDA business stores. Reads and mapped
+task/movement/transfer commands remain owner-service operations. Unmapped
+operations fail closed with an explicit upstream-contract error; no business
+mutation is fabricated locally. Business mutations remain owned by WMS
+services.
