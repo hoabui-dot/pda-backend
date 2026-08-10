@@ -67,7 +67,7 @@ func TestMovementPDAAPIMapping(t *testing.T) {
 		t.Fatal(e)
 	}
 	identity := identityapp.NewService(ids, tokens, ids, ids, func() time.Time { return fixedTime })
-	h, e := New(identity, nil, nil, moves, nil, nil, nil, Settings{RequestTimeout: time.Second, AuthRateLimit: 30, RateWindow: time.Minute, CircuitFailureThreshold: 3}, slog.New(slog.NewTextHandler(io.Discard, nil)), func() time.Time { return fixedTime })
+	h, e := New(identity, nil, nil, moves.Putaway, moves.Picking, moves.Replenishment, moves, nil, nil, nil, Settings{RequestTimeout: time.Second, AuthRateLimit: 30, RateWindow: time.Minute, CircuitFailureThreshold: 3}, slog.New(slog.NewTextHandler(io.Discard, nil)), func() time.Time { return fixedTime })
 	if e != nil {
 		t.Fatal(e)
 	}

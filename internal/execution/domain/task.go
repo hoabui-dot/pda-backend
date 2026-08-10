@@ -35,20 +35,41 @@ var (
 )
 
 type Task struct {
-	ID          string       `json:"id"`
-	Category    TaskCategory `json:"category"`
-	Status      TaskStatus   `json:"status"`
-	Priority    int          `json:"priority"`
-	Title       string       `json:"title"`
-	LineCount   int          `json:"lineCount"`
-	PieceCount  int64        `json:"pieceCount"`
-	DueAt       *time.Time   `json:"dueAt"`
-	WarehouseID string       `json:"warehouseId"`
-	OperatorID  *string      `json:"operatorId"`
-	LockState   string       `json:"lockState"`
-	Version     int64        `json:"version"`
-	CreatedAt   time.Time    `json:"createdAt"`
-	UpdatedAt   time.Time    `json:"updatedAt"`
+	ID              string                  `json:"id"`
+	Category        TaskCategory            `json:"category"`
+	Status          TaskStatus              `json:"status"`
+	Priority        int                     `json:"priority"`
+	Title           string                  `json:"title"`
+	LineCount       int                     `json:"lineCount"`
+	PieceCount      int64                   `json:"pieceCount"`
+	DueAt           *time.Time              `json:"dueAt"`
+	WarehouseID     string                  `json:"warehouseId"`
+	OperatorID      *string                 `json:"operatorId"`
+	LockState       string                  `json:"lockState"`
+	Version         int64                   `json:"version"`
+	CreatedAt       time.Time               `json:"createdAt"`
+	UpdatedAt       time.Time               `json:"updatedAt"`
+	PurchaseOrderID string                  `json:"purchaseOrderId,omitempty"`
+	Supplier        string                  `json:"supplier,omitempty"`
+	ReceivingLines  []ReceivingLineSnapshot `json:"lines,omitempty"`
+}
+
+// ReceivingLineSnapshot is delivered with a receiving task so the device can
+// render the assigned work without depending on a second detail request.
+type ReceivingLineSnapshot struct {
+	LineID             string  `json:"lineId"`
+	ItemID             string  `json:"itemId"`
+	SKU                string  `json:"sku,omitempty"`
+	ItemName           string  `json:"itemName,omitempty"`
+	UOMCode            string  `json:"uomCode,omitempty"`
+	LotCode            string  `json:"lotCode,omitempty"`
+	Barcode            string  `json:"barcode,omitempty"`
+	ExpectedQuantity   float64 `json:"expectedQuantity"`
+	HandedOverQuantity float64 `json:"handedOverQuantity"`
+	ReceivedQuantity   float64 `json:"receivedQuantity"`
+	RemainingQuantity  float64 `json:"remainingQuantity"`
+	LotRequired        bool    `json:"lotRequired"`
+	SerialRequired     bool    `json:"serialRequired"`
 }
 
 func (t *Task) Claim(operatorID string, baseVersion int64, now time.Time) error {

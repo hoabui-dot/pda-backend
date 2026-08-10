@@ -71,7 +71,7 @@ func TestReceivingAPIFromListThroughQuantityConfirmation(t *testing.T) {
 	}
 	log := messagingmock.NewInMemoryEventLog()
 	receivingService := receivingapp.New(receivingStore, receivingpostgres.Commands{Store: receivingStore}, receivingStore, receivingStore, receivingStore, messagingmock.NewPublisher(log, ""), receivingStore, func() time.Time { return fixedTime })
-	handler, err := New(identityService, nil, receivingService, nil, nil, nil, nil, Settings{RequestTimeout: time.Second, AuthRateLimit: 20, RateWindow: time.Minute, CircuitFailureThreshold: 3}, slog.New(slog.NewTextHandler(io.Discard, nil)), func() time.Time { return fixedTime })
+	handler, err := New(identityService, nil, receivingService, nil, nil, nil, nil, nil, nil, nil, Settings{RequestTimeout: time.Second, AuthRateLimit: 20, RateWindow: time.Minute, CircuitFailureThreshold: 3}, slog.New(slog.NewTextHandler(io.Discard, nil)), func() time.Time { return fixedTime })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -82,6 +82,12 @@ func TestReceivingAPIFromListThroughQuantityConfirmation(t *testing.T) {
 	headers := map[string]string{"X-Device-Id": "DEV-R", "X-Warehouse-Id": "WH-01"}
 	if response := request(handler, http.MethodGet, "/api/pda/v1/receiving/tasks", "", token, headers); response.Code != http.StatusOK || !strings.Contains(response.Body.String(), "REC-001") {
 		t.Fatalf("list: %d %s", response.Code, response.Body.String())
+	}
+	// The cross-workflow task feed includes receiving work. The generic detail
+	// route must resolve the same receiving owner record instead of returning
+	// TASK_NOT_FOUND from the execution store.
+	if response := request(handler, http.MethodGet, "/api/pda/v1/tasks/REC-001", "", token, headers); response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"category":"RECEIVING"`) || !strings.Contains(response.Body.String(), "LINE-01") {
+		t.Fatalf("generic receiving detail: %d %s", response.Code, response.Body.String())
 	}
 	startHeaders := map[string]string{"X-Device-Id": "DEV-R", "X-Warehouse-Id": "WH-01", "Idempotency-Key": "00000000-0000-0000-0000-000000000601", "If-Match": `"1"`}
 	if response := request(handler, http.MethodPost, "/api/pda/v1/receiving/tasks/REC-001/start", "", token, startHeaders); response.Code != http.StatusOK {

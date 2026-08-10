@@ -91,7 +91,7 @@ func main() {
 		}
 		receivingRemote := wmshttp.NewReceivingAdapter(client)
 		_, _, _, _, movementRemote, _, _ := wmshttp.NewUnavailableAdapters()
-		taskRemote := wmshttp.NewTaskAdapter(client)
+		taskRemote := wmshttp.NewTaskAdapter(client, receivingRemote)
 		inventoryRemote := wmshttp.NewInventoryAdapter(client)
 		shippingRemote := wmshttp.NewShippingAdapter(client)
 		putawayRemote := wmshttp.NewPutawayAdapter(client)

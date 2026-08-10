@@ -109,3 +109,9 @@ type ReceivingOperations interface {
 type ReceivingBarcodeOperations interface {
 	ResolveBarcodeWithSymbology(context.Context, string, string, string, platform.ActorContext) (receivingdomain.Line, error)
 }
+
+// ReceivingBatchOperations is the one-Receipt submit boundary used by the
+// production WMS adapter. Local legacy receiving services may omit it.
+type ReceivingBatchOperations interface {
+	ConfirmBatch(context.Context, receivingapp.BatchConfirmCommand) (receivingdomain.Task, error)
+}

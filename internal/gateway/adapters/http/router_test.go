@@ -18,6 +18,7 @@ import (
 	identityapp "github.com/company/pda-backend/internal/identity/application"
 	messagingmock "github.com/company/pda-backend/internal/integration/adapters/messagingmock"
 	wmsmock "github.com/company/pda-backend/internal/integration/adapters/wmsmock"
+	platform "github.com/company/pda-backend/internal/platform/domain"
 )
 
 var fixedTime = time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
@@ -263,6 +264,38 @@ func TestGatewayCircuitOpenHalfOpenClosed(t *testing.T) {
 	b.Record(false)
 	if !b.Allow() {
 		t.Fatal("circuit did not close")
+	}
+}
+
+func TestRouteScopedUpstreamHTTPErrorDoesNotTripGlobalCircuit(t *testing.T) {
+	response := httptest.NewRecorder()
+	writeError(response, &platform.DomainError{Code: "UPSTREAM_HTTP_ERROR", SafeMessage: "optional owner route failed"}, "corr")
+
+	if response.Code != http.StatusInternalServerError {
+		t.Fatalf("status: got %d, want 500", response.Code)
+	}
+	if response.Header().Get("X-Gateway-Dependency-Failure") != "" {
+		t.Fatal("route-scoped upstream error must not trip the global dependency breaker")
+	}
+}
+
+func TestReceivingOwnerValidationErrorsRemainClientErrors(t *testing.T) {
+	for _, code := range []string{"RECEIPT_BATCH_LINE_INVALID", "RECEIPT_LOT_DIMENSION_MISMATCH", "INVALID_INVENTORY_REQUEST"} {
+		response := httptest.NewRecorder()
+		writeError(response, &platform.DomainError{Code: code, SafeMessage: code}, "corr")
+		if response.Code != http.StatusUnprocessableEntity {
+			t.Fatalf("%s: got %d, want 422", code, response.Code)
+		}
+	}
+}
+
+func TestReceivingNotFoundIsNotReportedAsServiceFailure(t *testing.T) {
+	for _, code := range []string{"RECEIPT_NOT_FOUND", "UPSTREAM_NOT_FOUND"} {
+		response := httptest.NewRecorder()
+		writeError(response, &platform.DomainError{Code: code, SafeMessage: "Receipt not found"}, "corr")
+		if response.Code != http.StatusNotFound {
+			t.Fatalf("%s: got %d, want 404", code, response.Code)
+		}
 	}
 }
 

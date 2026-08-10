@@ -20,6 +20,7 @@ func main() {
 	password := required("PDA_SEED_PASSWORD")
 	operatorID := value("PDA_SEED_OPERATOR_ID", "OP-DEV-01")
 	employeeCode := value("PDA_SEED_EMPLOYEE_CODE", "EMP-DEV-01")
+	displayName := value("PDA_SEED_DISPLAY_NAME", "Development Operator")
 	warehouseID := value("PDA_SEED_WAREHOUSE_ID", "WH-01")
 	warehouseName := value("PDA_SEED_WAREHOUSE_NAME", "Development Warehouse")
 	deviceID := os.Getenv("PDA_SEED_DEVICE_ID")
@@ -38,7 +39,7 @@ func main() {
 		panic(err)
 	}
 	defer tx.Rollback(ctx)
-	_, err = tx.Exec(ctx, `INSERT INTO identity_operators(id,username,employee_code,display_name,password_hash,status,shift_code) VALUES($1,$2,$3,$4,$5,'ACTIVE','DAY') ON CONFLICT(username) DO UPDATE SET password_hash=EXCLUDED.password_hash,status='ACTIVE',failed_login_count=0,locked_until=NULL,updated_at=now()`, operatorID, strings.ToLower(strings.TrimSpace(username)), employeeCode, "Development Operator", hash)
+	_, err = tx.Exec(ctx, `INSERT INTO identity_operators(id,username,employee_code,display_name,password_hash,status,shift_code) VALUES($1,$2,$3,$4,$5,'ACTIVE','DAY') ON CONFLICT(username) DO UPDATE SET employee_code=EXCLUDED.employee_code,display_name=EXCLUDED.display_name,password_hash=EXCLUDED.password_hash,status='ACTIVE',failed_login_count=0,locked_until=NULL,updated_at=now()`, operatorID, strings.ToLower(strings.TrimSpace(username)), employeeCode, displayName, hash)
 	if err != nil {
 		panic(err)
 	}

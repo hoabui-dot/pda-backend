@@ -23,13 +23,16 @@ type ReceivingAdapter struct{ client *Client }
 func NewReceivingAdapter(client *Client) *ReceivingAdapter { return &ReceivingAdapter{client: client} }
 
 func (a *ReceivingAdapter) List(ctx context.Context, f receivingports.Filter, actor platform.ActorContext) (receivingports.Page, error) {
-	rows, err := a.client.ListReceipts(ctx, ports.ReceiptQuery{Status: f.Status, Limit: f.Limit})
+	rows, err := a.client.ListReceipts(ctx, ports.ReceiptQuery{Status: f.Status, AssignedOperatorID: f.OperatorID, Limit: f.Limit})
 	if err != nil {
 		return receivingports.Page{}, err
 	}
 	items := make([]receivingdomain.Task, 0, len(rows))
 	for _, row := range rows {
-		if row.Status != "Draft" || row.WarehouseLocationID == "" {
+		// Keep completed receipts in the operator feed so the Work page can
+		// render history after a refresh. The status is mapped to COMPLETED
+		// below; active filtering remains available through the status query.
+		if row.WarehouseLocationID == "" {
 			continue
 		}
 		if row.AssignedOperatorID != nil && *row.AssignedOperatorID != actor.OperatorID {
@@ -39,10 +42,28 @@ func (a *ReceivingAdapter) List(ctx context.Context, f receivingports.Filter, ac
 		if err != nil {
 			return receivingports.Page{}, err
 		}
-		if location.WarehouseID != actor.WarehouseID {
+		if !warehouseMatches(location, a.client.CanonicalWarehouse(actor.WarehouseID)) {
 			continue
 		}
-		items = append(items, receivingdomain.Task{ID: row.ReceiptID, OrderID: row.ReceiptID, PONumber: row.ReceiptCode, WarehouseID: actor.WarehouseID, Status: receiptTaskStatus(row.Status, row.ConfirmationStatus, row.AssignmentStatus), OperatorID: row.AssignedOperatorID, Version: 1})
+		// Current Inbound list responses include the complete line snapshot. Use
+		// it directly to avoid a per-receipt detail/location N+1 chain. Older
+		// owner deployments may still return summary-only rows, so retain a
+		// detail fallback for that contract shape.
+		if len(row.Lines) > 0 {
+			items = append(items, mapReceiptTask(ports.Receipt{
+				ReceiptID: row.ReceiptID, ReceiptCode: row.ReceiptCode,
+				WarehouseLocationID: row.WarehouseLocationID, Status: row.Status,
+				ConfirmationStatus: row.ConfirmationStatus, AssignedOperatorID: row.AssignedOperatorID,
+				AssignmentStatus: row.AssignmentStatus, AssignmentVersion: row.AssignmentVersion,
+				UpdatedAt: row.UpdatedAt, Lines: row.Lines,
+			}, actor.WarehouseID))
+			continue
+		}
+		detail, err := a.Detail(ctx, row.ReceiptID, actor)
+		if err != nil {
+			return receivingports.Page{}, err
+		}
+		items = append(items, detail)
 	}
 	return receivingports.Page{Items: items}, nil
 }
@@ -53,7 +74,7 @@ func (a *ReceivingAdapter) Detail(ctx context.Context, id string, actor platform
 		return receivingdomain.Task{}, err
 	}
 	if receipt.WarehouseLocationID == "" {
-		return receivingdomain.Task{}, fmt.Errorf("WAREHOUSE_ACCESS_DENIED")
+		return receivingdomain.Task{}, &platform.DomainError{Code: "WAREHOUSE_ACCESS_DENIED", SafeMessage: "Receiving task has no warehouse location"}
 	}
 	if receipt.AssignedOperatorID != nil && *receipt.AssignedOperatorID != actor.OperatorID {
 		return receivingdomain.Task{}, receivingdomain.ErrNotAssigned
@@ -62,21 +83,44 @@ func (a *ReceivingAdapter) Detail(ctx context.Context, id string, actor platform
 	if err != nil {
 		return receivingdomain.Task{}, err
 	}
-	if location.WarehouseID != actor.WarehouseID {
-		return receivingdomain.Task{}, fmt.Errorf("WAREHOUSE_ACCESS_DENIED")
+	if !warehouseMatches(location, a.client.CanonicalWarehouse(actor.WarehouseID)) {
+		return receivingdomain.Task{}, &platform.DomainError{Code: "WAREHOUSE_ACCESS_DENIED", SafeMessage: "Receiving task belongs to another warehouse"}
 	}
+	return mapReceiptTask(receipt, actor.WarehouseID), nil
+}
+
+func mapReceiptTask(receipt ports.Receipt, warehouseID string) receivingdomain.Task {
 	version := receipt.AssignmentVersion
 	if version < 1 {
 		version = 1
 	}
-	task := receivingdomain.Task{ID: receipt.ReceiptID, OrderID: receipt.ReceiptID, PONumber: receipt.ReceiptCode, WarehouseID: actor.WarehouseID, Status: receiptTaskStatus(receipt.Status, receipt.ConfirmationStatus, receipt.AssignmentStatus), OperatorID: receipt.AssignedOperatorID, Version: version, UpdatedAt: time.Now().UTC()}
+	updatedAt := receipt.UpdatedAt
+	if updatedAt.IsZero() {
+		updatedAt = time.Unix(0, 0).UTC()
+	}
+	task := receivingdomain.Task{ID: receipt.ReceiptID, OrderID: receipt.ReceiptID, PONumber: receipt.ReceiptCode, WarehouseID: warehouseID, Status: receiptTaskStatus(receipt.Status, receipt.ConfirmationStatus, receipt.AssignmentStatus), OperatorID: receipt.AssignedOperatorID, Version: version, UpdatedAt: updatedAt}
 	for _, line := range receipt.Lines {
 		if line.LineID == "" {
 			continue
 		}
-		task.Lines = append(task.Lines, receivingdomain.Line{ID: line.LineID, ItemID: line.ItemRevisionID, Barcode: line.ItemRevisionID, ExpectedQuantity: int64(line.Expected), ReceivedQuantity: int64(line.ReceivedQuantity), SKU: line.ItemRevisionID})
+		barcode := line.LotCode
+		if barcode == "" {
+			barcode = line.ItemRevisionID
+		}
+		expected := int64(line.Expected)
+		received := int64(line.ReceivedQuantity)
+		task.Lines = append(task.Lines, receivingdomain.Line{ID: line.LineID, ItemID: line.ItemRevisionID, Barcode: barcode, ExpectedQuantity: expected, ReceivedQuantity: received, HandedOverQuantity: expected, RemainingQuantity: expected - received, SKU: line.ItemRevisionID, UOMCode: line.UOMCode, LotCode: line.LotCode, LotRequired: line.LotCode != "", SerialRequired: false})
 	}
-	return task, nil
+	return task
+}
+
+// warehouseMatches accepts the canonical WMS UUID and the WMS business code
+// carried by the PDA session. PDA identity validation still happens before the
+// adapter is called; this comparison only bridges the two representations at
+// the owner-service boundary.
+func warehouseMatches(location ports.Location, warehouse string) bool {
+	return strings.EqualFold(strings.TrimSpace(location.WarehouseID), strings.TrimSpace(warehouse)) ||
+		strings.EqualFold(strings.TrimSpace(location.WarehouseCode), strings.TrimSpace(warehouse))
 }
 
 func receiptTaskStatus(status, confirmationStatus, assignmentStatus string) receivingdomain.Status {
@@ -114,7 +158,21 @@ func (a *ReceivingAdapter) resolveBarcode(ctx context.Context, taskID, barcode, 
 		return receivingdomain.Line{}, err
 	}
 	for _, line := range task.Lines {
-		if line.Barcode == barcode || line.SKU == barcode {
+		// A receipt may contain multiple lines for the same item revision but
+		// different lots. Never resolve a completed line again: exact lot/barcode
+		// matches must be evaluated before the generic item identity fallback.
+		if line.ExpectedQuantity <= line.ReceivedQuantity {
+			continue
+		}
+		if line.Barcode == barcode {
+			return line, nil
+		}
+	}
+	for _, line := range task.Lines {
+		if line.ExpectedQuantity <= line.ReceivedQuantity {
+			continue
+		}
+		if line.SKU == barcode {
 			return line, nil
 		}
 		for _, ownerLine := range mustReceiptLines(ctx, a.client, taskID) {
@@ -122,7 +180,7 @@ func (a *ReceivingAdapter) resolveBarcode(ctx context.Context, taskID, barcode, 
 				continue
 			}
 			scanID := fmt.Sprintf("%x", sha256.Sum256([]byte(taskID+"|"+line.ID+"|"+barcode)))
-			resolved, resolveErr := a.client.ResolveBarcode(ctx, barcode, symbology, actor.WarehouseID, taskID, line.ID, scanID)
+			resolved, resolveErr := a.client.ResolveBarcode(ctx, barcode, symbology, a.client.CanonicalWarehouse(actor.WarehouseID), taskID, line.ID, scanID)
 			if resolveErr != nil {
 				return receivingdomain.Line{}, resolveErr
 			}
@@ -178,6 +236,20 @@ func (a *ReceivingAdapter) Confirm(ctx context.Context, command receivingapp.Con
 	// Confirmation may apply approval/tolerance policy and inventory posting in
 	// Inbound. Reload after the owner command instead of synthesizing a PDA
 	// quantity or status from the request payload.
+	return a.Detail(ctx, command.TaskID, command.Actor)
+}
+
+func (a *ReceivingAdapter) ConfirmBatch(ctx context.Context, command receivingapp.BatchConfirmCommand) (receivingdomain.Task, error) {
+	lines := make([]ports.ReceiptBatchLine, 0, len(command.Lines))
+	for _, line := range command.Lines {
+		lines = append(lines, ports.ReceiptBatchLine{LineID: line.LineID, ActualQuantity: float64(line.ActualQuantity), UOMCode: line.UOMCode, ItemRevisionID: line.ItemRevisionID, LotCode: line.LotCode})
+	}
+	if len(lines) == 0 {
+		return receivingdomain.Task{}, fmt.Errorf("RECEIPT_LINES_REQUIRED")
+	}
+	if _, err := a.client.ReceiveReceipt(ctx, command.TaskID, ports.ReceiptBatchRequest{CommandID: command.CommandID.String(), ExpectedReceiptVersion: command.BaseVersion, Lines: lines, IdempotencyKey: command.IdempotencyKey}); err != nil {
+		return receivingdomain.Task{}, err
+	}
 	return a.Detail(ctx, command.TaskID, command.Actor)
 }
 

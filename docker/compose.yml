@@ -48,12 +48,16 @@ services:
       PDA_KAFKA_BROKERS: ${PDA_KAFKA_BROKERS:-kafka:29092}
       PDA_KAFKA_GROUP_ID: ${PDA_GATEWAY_KAFKA_GROUP_ID:-pda-backend-gateway-v1}
       PDA_KAFKA_TOPIC_PREFIX: pda
-      PDA_UPSTREAM_WMS_MODE: ${PDA_UPSTREAM_WMS_MODE:-mock}
-      # Required when PDA_UPSTREAM_WMS_MODE=http. Empty defaults preserve
-      # local mock mode while application validation rejects incomplete HTTP mode.
-      PDA_UPSTREAM_WMS_BASE_URL: ${PDA_UPSTREAM_WMS_BASE_URL:-}
-      PDA_UPSTREAM_WMS_TOKEN: ${PDA_UPSTREAM_WMS_TOKEN:-}
-      PDA_UPSTREAM_WMS_SERVICE_TOKEN: ${PDA_UPSTREAM_WMS_SERVICE_TOKEN:-}
+      PDA_UPSTREAM_WMS_MODE: ${PDA_UPSTREAM_WMS_MODE:-http}
+      PDA_UPSTREAM_WMS_BASE_URL: ${PDA_UPSTREAM_WMS_BASE_URL:-http://s-factory-wms-wms-public-gateway-1:18000}
+      PDA_UPSTREAM_WMS_TOKEN: ${PDA_UPSTREAM_WMS_TOKEN:?PDA_UPSTREAM_WMS_TOKEN is required for HTTP mode}
+      PDA_UPSTREAM_WMS_SERVICE_TOKEN: ${PDA_UPSTREAM_WMS_SERVICE_TOKEN:?PDA_UPSTREAM_WMS_SERVICE_TOKEN is required for HTTP mode}
+      # Demo WMS exposes the PDA warehouse as MAIN while Master Data uses its
+      # canonical code. Deployments with another warehouse must override this
+      # explicit mapping rather than relying on inference.
+      # PDA sends the operator-facing MAIN code; WMS owner APIs require the
+      # canonical warehouse UUID for execution and cycle-count queries.
+      PDA_UPSTREAM_WMS_WAREHOUSE_ALIASES: ${PDA_UPSTREAM_WMS_WAREHOUSE_ALIASES:-MAIN=b29799e0-9c2e-49e6-91cc-6e8b620e6a1e}
     depends_on:
       postgres:
         condition: service_healthy
@@ -102,4 +106,4 @@ networks:
     name: ${PDA_PLATFORM_NETWORK_NAME:-platform-net}
   wms-internal:
     external: true
-    name: ${PDA_WMS_INTERNAL_NETWORK_NAME:-wms-internal}
+    name: ${PDA_WMS_INTERNAL_NETWORK_NAME:-s-factory-wms_wms-internal}

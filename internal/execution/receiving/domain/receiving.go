@@ -37,13 +37,19 @@ type Policy struct {
 	ConditionPolicy         []string `json:"conditionPolicy"`
 }
 type Line struct {
-	ID               string `json:"id"`
-	ItemID           string `json:"itemId"`
-	ItemName         string `json:"itemName"`
-	Barcode          string `json:"barcode"`
-	ExpectedQuantity int64  `json:"expectedQuantity"`
-	ReceivedQuantity int64  `json:"receivedQuantity"`
-	SKU              string `json:"sku"`
+	ID                 string `json:"id"`
+	ItemID             string `json:"itemId"`
+	ItemName           string `json:"itemName"`
+	Barcode            string `json:"barcode"`
+	ExpectedQuantity   int64  `json:"expectedQuantity"`
+	ReceivedQuantity   int64  `json:"receivedQuantity"`
+	SKU                string `json:"sku"`
+	UOMCode            string `json:"uomCode"`
+	LotCode            string `json:"lotCode"`
+	HandedOverQuantity int64  `json:"handedOverQuantity"`
+	RemainingQuantity  int64  `json:"remainingQuantity"`
+	LotRequired        bool   `json:"lotRequired"`
+	SerialRequired     bool   `json:"serialRequired"`
 }
 type Task struct {
 	ID          string    `json:"id"`

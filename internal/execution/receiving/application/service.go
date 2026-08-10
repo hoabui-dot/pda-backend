@@ -43,6 +43,17 @@ type ConfirmCommand struct {
 	ScannedAt       *time.Time
 }
 
+type BatchLine struct {
+	LineID, ItemRevisionID, LotCode, UOMCode string
+	ActualQuantity                           int64
+}
+
+type BatchConfirmCommand struct {
+	Command
+	Lines  []BatchLine
+	Remark *string
+}
+
 func (s *Service) List(ctx context.Context, f ports.Filter, actor platform.ActorContext) (ports.Page, error) {
 	if f.WarehouseID != actor.WarehouseID {
 		return ports.Page{}, &platform.DomainError{Code: "WAREHOUSE_ACCESS_DENIED", SafeMessage: "Warehouse access denied"}

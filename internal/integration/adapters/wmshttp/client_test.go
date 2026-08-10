@@ -3,13 +3,17 @@ package wmshttp
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
+	receivingdomain "github.com/company/pda-backend/internal/execution/receiving/domain"
+	receivingports "github.com/company/pda-backend/internal/execution/receiving/ports"
 	"github.com/company/pda-backend/internal/integration/ports"
+	platform "github.com/company/pda-backend/internal/platform/domain"
 )
 
 func TestWarehousesMapsApprovedWMSResponse(t *testing.T) {
@@ -35,6 +39,50 @@ func TestWarehousesMapsApprovedWMSResponse(t *testing.T) {
 	}
 	if len(warehouses) != 1 || warehouses[0].ID != "wh-1" || warehouses[0].Code != "WH-01" || warehouses[0].Name != "Kho 1" {
 		t.Fatalf("unexpected mapped warehouses: %+v", warehouses)
+	}
+}
+
+func TestOwnerResponseErrorUsesHTTPStatusForHumanErrorText(t *testing.T) {
+	err := ownerResponseError(http.StatusNotFound, []byte(`{"error":"Not Found"}`))
+	var domainErr *platform.DomainError
+	if !errors.As(err, &domainErr) {
+		t.Fatalf("expected domain error, got %T", err)
+	}
+	if domainErr.Code != "UPSTREAM_NOT_FOUND" {
+		t.Fatalf("code: got %q, want UPSTREAM_NOT_FOUND", domainErr.Code)
+	}
+}
+
+func TestWarehouseAliasesAreExplicitAndCaseInsensitive(t *testing.T) {
+	aliases := parseWarehouseAliases("MAIN=warehouse-uuid, invalid, OTHER=other-uuid")
+	if aliases["MAIN"] != "warehouse-uuid" || aliases["OTHER"] != "other-uuid" {
+		t.Fatalf("unexpected aliases: %#v", aliases)
+	}
+	if _, ok := aliases["INVALID"]; ok {
+		t.Fatal("malformed alias was accepted")
+	}
+}
+
+func TestListInventoryBalancesAcceptsOwnerArrayResponse(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != inventoryPath+"/balances" {
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.String())
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`[{"lot_id":"lot-1","lot_code":"LOT-1","item_revision_id":"item-1","uom_code":"KG","location_id":"loc-1","on_hand_qty":12.5,"reserved_qty":2,"available_qty":10.5,"status":"Active","row_version":3}]`))
+	}))
+	defer server.Close()
+
+	client, err := New(server.URL, "test-token", server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows, err := client.ListInventoryBalances(context.Background(), "item-1", "loc-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || rows[0].LotCode != "LOT-1" || rows[0].OnHandQty != 12.5 || rows[0].RowVersion != 3 {
+		t.Fatalf("unexpected inventory balances: %+v", rows)
 	}
 }
 
@@ -87,6 +135,74 @@ func TestReceivingAndLocationAdaptersMapOwnerContracts(t *testing.T) {
 	quantity, err := client.RecordReceiptQuantity(context.Background(), "r-1", "l-1", ports.ReceiptQuantityRequest{ActualQuantity: 2, UOMCode: "EA", ExpectedVersion: 1, ItemRevisionID: "item-1", LotCode: "lot-1", IdempotencyKey: "quantity-1"})
 	if err != nil || quantity.Status != "RECORDED" || quantity.Version != 2 {
 		t.Fatalf("quantity=%+v err=%v", quantity, err)
+	}
+}
+
+func TestReceivingListReturnsOwnerLineSnapshot(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == inboundReceiptsPath:
+			_, _ = w.Write([]byte(`{"data":[{"receipt_id":"r-2","receipt_code":"R-2","warehouse_location_id":"loc-2","status":"Draft","assigned_operator_id":"op-1","assignment_status":"CLAIMED","line_count":2}]}`))
+		case r.Method == http.MethodGet && r.URL.Path == locationPath+"/loc-2":
+			_, _ = w.Write([]byte(`{"location_id":"loc-2","location_code":"RECV-02","warehouse_id":"wh-1","warehouse_code":"MAIN"}`))
+		case r.Method == http.MethodGet && r.URL.Path == inboundReceiptsPath+"/r-2":
+			_, _ = w.Write([]byte(`{"receipt_id":"r-2","receipt_code":"R-2","warehouse_location_id":"loc-2","status":"Draft","assigned_operator_id":"op-1","assignment_status":"CLAIMED","assignment_version":1,"lines":[{"line_id":"line-a","item_revision_id":"item-a","lot_code":"LOT-A","expected_quantity":2,"received_quantity":0},{"line_id":"line-b","item_revision_id":"item-b","lot_code":"LOT-B","expected_quantity":3,"received_quantity":0}]}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	client, err := New(server.URL, "test-token", server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter := NewReceivingAdapter(client)
+	page, err := adapter.List(context.Background(), receivingports.Filter{WarehouseID: "wh-1", OperatorID: "op-1", Limit: 20}, platform.ActorContext{OperatorID: "op-1", WarehouseID: "wh-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Items) != 1 || len(page.Items[0].Lines) != 2 || page.Items[0].Lines[0].Barcode != "LOT-A" || page.Items[0].Lines[1].ItemID != "item-b" {
+		t.Fatalf("receiving list lost owner line snapshot: %+v", page.Items)
+	}
+}
+
+func TestReceivingListKeepsCompletedReceiptForHistory(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method == http.MethodGet && r.URL.Path == inboundReceiptsPath {
+			_, _ = w.Write([]byte(`{"data":[{"receipt_id":"r-completed","receipt_code":"R-COMP","warehouse_location_id":"loc-1","status":"Confirmed","confirmation_status":"CONFIRMED","assigned_operator_id":"op-1","assignment_status":"COMPLETED","assignment_version":2,"lines":[{"line_id":"line-1","item_revision_id":"item-1","lot_code":"LOT-1","expected_quantity":4,"received_quantity":4}]}]}`))
+			return
+		}
+		if r.Method == http.MethodGet && r.URL.Path == locationPath+"/loc-1" {
+			_, _ = w.Write([]byte(`{"location_id":"loc-1","warehouse_id":"wh-1","warehouse_code":"MAIN"}`))
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer server.Close()
+	client, err := New(server.URL, "test-token", server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	page, err := NewReceivingAdapter(client).List(context.Background(), receivingports.Filter{WarehouseID: "wh-1", OperatorID: "op-1", Limit: 20}, platform.ActorContext{OperatorID: "op-1", WarehouseID: "wh-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Items) != 1 || page.Items[0].Status != receivingdomain.StatusCompleted {
+		t.Fatalf("completed receipt was not retained for history: %+v", page.Items)
+	}
+}
+
+func TestWarehouseMatchesCanonicalIDOrBusinessCode(t *testing.T) {
+	location := ports.Location{WarehouseID: "warehouse-uuid", WarehouseCode: "MAIN"}
+	for _, warehouse := range []string{"warehouse-uuid", "MAIN", "main"} {
+		if !warehouseMatches(location, warehouse) {
+			t.Fatalf("warehouse %q should match %+v", warehouse, location)
+		}
+	}
+	if warehouseMatches(location, "OTHER") {
+		t.Fatal("different warehouse matched")
 	}
 }
 

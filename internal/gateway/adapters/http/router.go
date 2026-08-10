@@ -84,6 +84,7 @@ func New(identityService *identityapp.Service, taskService gatewayports.TaskOper
 			protected.With(router.deviceWarehouseContext).Get("/dashboard", router.dashboard)
 			protected.With(router.deviceWarehouseContext).Get("/tasks/summary", router.taskSummary)
 			protected.With(router.deviceWarehouseContext).Get("/tasks", router.tasksList)
+			protected.With(router.deviceWarehouseContext).Get("/events", router.taskEvents)
 			protected.With(router.deviceWarehouseContext).Get("/tasks/{taskId}", router.taskDetail)
 			protected.With(router.deviceWarehouseContext).Post("/tasks/{taskId}/claim", router.claimTask)
 			protected.With(router.deviceWarehouseContext).Post("/tasks/{taskId}/release", router.releaseTask)
@@ -182,7 +183,13 @@ func New(identityService *identityapp.Service, taskService gatewayports.TaskOper
 }
 
 func withTimeout(handler http.Handler, timeout time.Duration) http.Handler {
-	return http.TimeoutHandler(handler, timeout, `{"data":null,"meta":{"serverTime":null,"correlationId":""},"errors":[{"code":"GATEWAY_TIMEOUT","message":"Request timed out","retryable":true}]}`)
+	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		if strings.HasSuffix(req.URL.Path, "/events") {
+			handler.ServeHTTP(w, req)
+			return
+		}
+		http.TimeoutHandler(handler, timeout, `{"data":null,"meta":{"serverTime":null,"correlationId":""},"errors":[{"code":"GATEWAY_TIMEOUT","message":"Request timed out","retryable":true}]}`).ServeHTTP(w, req)
+	})
 }
 
 type contextKey string
@@ -220,18 +227,39 @@ func (r *Router) locale(next http.Handler) http.Handler {
 
 type statusWriter struct {
 	http.ResponseWriter
-	status int
+	status            int
+	dependencyFailure bool
+}
+
+// Preserve streaming support for SSE while retaining request status logging.
+func (w *statusWriter) Flush() {
+	if flusher, ok := w.ResponseWriter.(http.Flusher); ok {
+		flusher.Flush()
+	}
 }
 
 func (w *statusWriter) WriteHeader(status int) {
 	w.status = status
+	if w.Header().Get("X-Gateway-Dependency-Failure") == "1" {
+		w.dependencyFailure = true
+	}
 	w.ResponseWriter.WriteHeader(status)
 }
 func (r *Router) logging(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		r.logger.Info("pda_request_start",
+			"method", req.Method,
+			"route", req.URL.Path,
+			"query", req.URL.RawQuery,
+			"operatorId", req.Header.Get("X-Operator-Id"),
+			"userId", req.Header.Get("X-User-ID"),
+			"warehouseId", req.Header.Get("X-Warehouse-Id"),
+			"deviceId", req.Header.Get("X-Device-Id"),
+			"correlationId", correlation(req.Context()),
+		)
 		wrapped := &statusWriter{ResponseWriter: w, status: http.StatusOK}
 		next.ServeHTTP(wrapped, req)
-		r.logger.Info("request", "method", req.Method, "route", req.URL.Path, "status", wrapped.status, "correlationId", correlation(req.Context()))
+		r.logger.Info("pda_request_end", "method", req.Method, "route", req.URL.Path, "status", wrapped.status, "correlationId", correlation(req.Context()), "dependencyFailure", wrapped.dependencyFailure)
 	})
 }
 
@@ -297,7 +325,10 @@ func (r *Router) circuitBreak(next http.Handler) http.Handler {
 		}
 		recorder := &statusWriter{ResponseWriter: w, status: http.StatusOK}
 		next.ServeHTTP(recorder, req)
-		r.breaker.Record(recorder.status >= http.StatusInternalServerError)
+		// Only explicitly classified dependency failures affect the breaker.
+		// A route-level 5xx such as an unmapped optional adapter must not take
+		// authentication, task reads, and SSE down with it.
+		r.breaker.Record(recorder.dependencyFailure)
 	})
 }
 
@@ -486,12 +517,83 @@ func (r *Router) tasksList(w http.ResponseWriter, req *http.Request) {
 	writeData(w, http.StatusOK, map[string]any{"items": items, "nextCursor": page.NextCursor, "asOf": now, "stale": false}, correlation(req.Context()), now)
 }
 func (r *Router) taskDetail(w http.ResponseWriter, req *http.Request) {
-	task, err := r.tasks.Detail(req.Context(), chi.URLParam(req, "taskId"), r.actor(req))
+	var task executiondomain.Task
+	var err error
+	if r.tasks != nil {
+		task, err = r.tasks.Detail(req.Context(), chi.URLParam(req, "taskId"), r.actor(req))
+	} else {
+		err = &platform.DomainError{Code: "TASK_NOT_FOUND", SafeMessage: "Task not found"}
+	}
 	if err != nil {
+		// The task feed is a cross-workflow endpoint and includes receiving
+		// work. Receiving is owned by its own application boundary, so a
+		// receiving task is not necessarily present in the execution-task
+		// store. Keep the generic detail route consistent with its feed by
+		// resolving that workflow through the receiving port when the
+		// execution lookup is a genuine not-found.
+		var domainErr *platform.DomainError
+		if r.receiving != nil && errors.As(err, &domainErr) && domainErr.Code == "TASK_NOT_FOUND" {
+			if receivingTask, receivingErr := r.receiving.Detail(req.Context(), chi.URLParam(req, "taskId"), r.actor(req)); receivingErr == nil {
+				writeData(w, http.StatusOK, receivingTaskView(receivingTask, r.actor(req).OperatorID), correlation(req.Context()), r.now())
+				return
+			}
+		}
 		writeError(w, err, correlation(req.Context()))
 		return
 	}
 	writeData(w, http.StatusOK, taskView(task, r.actor(req).OperatorID), correlation(req.Context()), r.now())
+}
+
+func receivingTaskView(task receivingdomain.Task, operatorID string) map[string]any {
+	lockState := "AVAILABLE"
+	if task.OperatorID != nil {
+		lockState = "LOCKED"
+		if *task.OperatorID == operatorID {
+			lockState = "OWNED"
+		}
+	}
+	var pieceCount int64
+	for _, line := range task.Lines {
+		pieceCount += line.ExpectedQuantity
+	}
+	lines := make([]executiondomain.ReceivingLineSnapshot, 0, len(task.Lines))
+	for _, line := range task.Lines {
+		lines = append(lines, executiondomain.ReceivingLineSnapshot{
+			LineID:             line.ID,
+			ItemID:             line.ItemID,
+			SKU:                line.SKU,
+			ItemName:           line.ItemName,
+			UOMCode:            line.UOMCode,
+			LotCode:            line.LotCode,
+			Barcode:            line.Barcode,
+			ExpectedQuantity:   float64(line.ExpectedQuantity),
+			HandedOverQuantity: float64(line.HandedOverQuantity),
+			ReceivedQuantity:   float64(line.ReceivedQuantity),
+			RemainingQuantity:  float64(line.ExpectedQuantity - line.ReceivedQuantity),
+			LotRequired:        task.Policy.LotRequired,
+			SerialRequired:     task.Policy.SerialRequired,
+		})
+	}
+	return map[string]any{
+		"id":                 task.ID,
+		"category":           "RECEIVING",
+		"type":               "RECEIVING",
+		"status":             task.Status,
+		"priority":           0,
+		"title":              task.PONumber,
+		"lineCount":          len(task.Lines),
+		"pieceCount":         pieceCount,
+		"dueAt":              nil,
+		"assignedOperatorId": task.OperatorID,
+		"lockState":          lockState,
+		"version":            task.Version,
+		"createdAt":          task.UpdatedAt.UTC(),
+		"updatedAt":          task.UpdatedAt.UTC(),
+		"warehouseId":        task.WarehouseID,
+		"purchaseOrderId":    task.PONumber,
+		"supplier":           task.Supplier,
+		"lines":              lines,
+	}
 }
 
 func taskView(task executiondomain.Task, operatorID string) map[string]any {
@@ -513,7 +615,7 @@ func taskView(task executiondomain.Task, operatorID string) map[string]any {
 			}
 		}
 	}
-	return map[string]any{"id": task.ID, "category": task.Category, "type": task.Category, "status": task.Status, "priority": task.Priority, "title": title, "lineCount": task.LineCount, "pieceCount": task.PieceCount, "dueAt": task.DueAt, "assignedOperatorId": task.OperatorID, "lockState": lockState, "version": task.Version, "createdAt": createdAt.UTC(), "updatedAt": task.UpdatedAt.UTC(), "warehouseId": task.WarehouseID}
+	return map[string]any{"id": task.ID, "category": task.Category, "type": task.Category, "status": task.Status, "priority": task.Priority, "title": title, "lineCount": task.LineCount, "pieceCount": task.PieceCount, "dueAt": task.DueAt, "assignedOperatorId": task.OperatorID, "lockState": lockState, "version": task.Version, "createdAt": createdAt.UTC(), "updatedAt": task.UpdatedAt.UTC(), "warehouseId": task.WarehouseID, "purchaseOrderId": task.PurchaseOrderID, "supplier": task.Supplier, "lines": task.ReceivingLines}
 }
 func (r *Router) taskCommand(req *http.Request) (executionapp.TaskCommand, error) {
 	key := req.Header.Get("Idempotency-Key")
@@ -642,7 +744,7 @@ func (r *Router) receivingBarcode(w http.ResponseWriter, req *http.Request) {
 		writeError(w, &platform.DomainError{Code: "INVALID_REQUEST", SafeMessage: "Barcode is required"}, correlation(req.Context()))
 		return
 	}
-	if input.TaskID != "" && input.TaskID != chi.URLParam(req, "taskId") || input.ScanContext != "" && input.ScanContext != "RECEIVING_ITEM" {
+	if input.TaskID != "" && input.TaskID != chi.URLParam(req, "taskId") || input.ScanContext != "" && input.ScanContext != "RECEIVING_ITEM" && input.ScanContext != "RECEIVING_LOT" {
 		writeError(w, &platform.DomainError{Code: "BARCODE_WRONG_CONTEXT", SafeMessage: "Barcode scan context is invalid"}, correlation(req.Context()))
 		return
 	}
@@ -666,7 +768,11 @@ func (r *Router) receivingBarcode(w http.ResponseWriter, req *http.Request) {
 		writeError(w, err, correlation(req.Context()))
 		return
 	}
-	writeData(w, http.StatusOK, map[string]any{"lineId": line.ID, "itemId": line.ItemID, "sku": line.SKU, "itemName": line.ItemName, "barcode": line.Barcode, "rawValue": input.RawValue, "normalizedValue": barcode, "symbology": input.Symbology, "scanContext": "RECEIVING_ITEM", "remainingQuantity": line.ExpectedQuantity - line.ReceivedQuantity, "quantityPolicy": map[string]any{"allowOverReceipt": false}, "nextStep": "CONFIRM_QUANTITY", "taskVersion": nil, "scannedAt": input.ScannedAt}, correlation(req.Context()), r.now())
+	scanContext := input.ScanContext
+	if scanContext == "" {
+		scanContext = "RECEIVING_ITEM"
+	}
+	writeData(w, http.StatusOK, map[string]any{"lineId": line.ID, "itemId": line.ItemID, "sku": line.SKU, "itemName": line.ItemName, "barcode": line.Barcode, "rawValue": input.RawValue, "normalizedValue": barcode, "symbology": input.Symbology, "scanContext": scanContext, "remainingQuantity": line.ExpectedQuantity - line.ReceivedQuantity, "quantityPolicy": map[string]any{"allowOverReceipt": false}, "nextStep": "CONFIRM_QUANTITY", "taskVersion": nil, "scannedAt": input.ScannedAt}, correlation(req.Context()), r.now())
 }
 func (r *Router) receivingConfirm(w http.ResponseWriter, req *http.Request) {
 	base, err := r.receivingBaseCommand(req)
@@ -675,22 +781,79 @@ func (r *Router) receivingConfirm(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	var input struct {
-		CommandID      uuid.UUID  `json:"commandId"`
-		IdempotencyKey string     `json:"idempotencyKey"`
-		TaskID         string     `json:"taskId"`
-		LineID         string     `json:"lineId"`
-		Barcode        string     `json:"barcode"`
-		Quantity       int64      `json:"quantity"`
-		Condition      string     `json:"condition"`
-		Remark         *string    `json:"remark"`
-		BaseVersion    int64      `json:"baseVersion"`
-		ScannedAt      *time.Time `json:"scannedAt"`
+		CommandID           uuid.UUID  `json:"commandId"`
+		CommandIDSnake      uuid.UUID  `json:"command_id"`
+		IdempotencyKey      string     `json:"idempotencyKey"`
+		IdempotencyKeySnake string     `json:"idempotency_key"`
+		TaskID              string     `json:"taskId"`
+		TaskIDSnake         string     `json:"task_id"`
+		LineID              string     `json:"lineId"`
+		Barcode             string     `json:"barcode"`
+		Quantity            int64      `json:"quantity"`
+		Condition           string     `json:"condition"`
+		Remark              *string    `json:"remark"`
+		BaseVersion         int64      `json:"baseVersion"`
+		BaseVersionSnake    int64      `json:"base_version"`
+		ScannedAt           *time.Time `json:"scannedAt"`
+		Lines               []struct {
+			LineID              string `json:"lineId"`
+			LineIDSnake         string `json:"line_id"`
+			ItemRevisionID      string `json:"itemRevisionId"`
+			ItemRevisionIDSnake string `json:"item_revision_id"`
+			LotCode             string `json:"lotCode"`
+			LotCodeSnake        string `json:"lot_code"`
+			UOMCode             string `json:"uomCode"`
+			UOMCodeSnake        string `json:"uom_code"`
+			ActualQuantity      int64  `json:"actualQuantity"`
+			ActualQuantitySnake int64  `json:"actual_quantity"`
+		} `json:"lines"`
+	}
+	if input.CommandID == uuid.Nil {
+		input.CommandID = input.CommandIDSnake
+	}
+	if input.IdempotencyKey == "" {
+		input.IdempotencyKey = input.IdempotencyKeySnake
+	}
+	if input.TaskID == "" {
+		input.TaskID = input.TaskIDSnake
+	}
+	if input.BaseVersion == 0 {
+		input.BaseVersion = input.BaseVersionSnake
 	}
 	if err := decode(req, &input); err != nil || input.CommandID != base.CommandID || input.BaseVersion != base.BaseVersion || input.TaskID != "" && input.TaskID != base.TaskID || input.IdempotencyKey != "" && input.IdempotencyKey != base.IdempotencyKey {
 		writeError(w, &platform.DomainError{Code: "INVALID_REQUEST", SafeMessage: "Command metadata does not match headers"}, correlation(req.Context()))
 		return
 	}
-	task, err := r.receiving.Confirm(req.Context(), receivingapp.ConfirmCommand{Command: base, LineID: input.LineID, Barcode: input.Barcode, Quantity: input.Quantity, Condition: input.Condition, Remark: input.Remark, ScannedAt: input.ScannedAt})
+	var task receivingdomain.Task
+	if len(input.Lines) > 0 {
+		batch, ok := r.receiving.(gatewayports.ReceivingBatchOperations)
+		if !ok {
+			writeError(w, &platform.DomainError{Code: "RECEIVING_BATCH_UNAVAILABLE", SafeMessage: "Batch receiving is not available for this runtime"}, correlation(req.Context()))
+			return
+		}
+		lines := make([]receivingapp.BatchLine, 0, len(input.Lines))
+		for _, line := range input.Lines {
+			if line.LineID == "" {
+				line.LineID = line.LineIDSnake
+			}
+			if line.ItemRevisionID == "" {
+				line.ItemRevisionID = line.ItemRevisionIDSnake
+			}
+			if line.LotCode == "" {
+				line.LotCode = line.LotCodeSnake
+			}
+			if line.UOMCode == "" {
+				line.UOMCode = line.UOMCodeSnake
+			}
+			if line.ActualQuantity == 0 {
+				line.ActualQuantity = line.ActualQuantitySnake
+			}
+			lines = append(lines, receivingapp.BatchLine{LineID: line.LineID, ItemRevisionID: line.ItemRevisionID, LotCode: line.LotCode, UOMCode: line.UOMCode, ActualQuantity: line.ActualQuantity})
+		}
+		task, err = batch.ConfirmBatch(req.Context(), receivingapp.BatchConfirmCommand{Command: base, Lines: lines, Remark: input.Remark})
+	} else {
+		task, err = r.receiving.Confirm(req.Context(), receivingapp.ConfirmCommand{Command: base, LineID: input.LineID, Barcode: input.Barcode, Quantity: input.Quantity, Condition: input.Condition, Remark: input.Remark, ScannedAt: input.ScannedAt})
+	}
 	if err != nil {
 		writeError(w, err, correlation(req.Context()))
 		return
@@ -721,7 +884,7 @@ func receivingView(task receivingdomain.Task) map[string]any {
 	for _, line := range task.Lines {
 		expected += line.ExpectedQuantity
 		received += line.ReceivedQuantity
-		lines = append(lines, map[string]any{"lineId": line.ID, "itemId": line.ItemID, "sku": line.SKU, "itemName": line.ItemName, "barcode": line.Barcode, "expectedQuantity": line.ExpectedQuantity, "receivedQuantity": line.ReceivedQuantity, "remainingQuantity": line.ExpectedQuantity - line.ReceivedQuantity, "lotRequired": task.Policy.LotRequired, "serialRequired": task.Policy.SerialRequired})
+		lines = append(lines, map[string]any{"lineId": line.ID, "itemId": line.ItemID, "sku": line.SKU, "itemName": line.ItemName, "barcode": line.Barcode, "lotCode": line.LotCode, "uomCode": line.UOMCode, "expectedQuantity": line.ExpectedQuantity, "receivedQuantity": line.ReceivedQuantity, "remainingQuantity": line.ExpectedQuantity - line.ReceivedQuantity, "lotRequired": task.Policy.LotRequired, "serialRequired": task.Policy.SerialRequired})
 	}
 	return map[string]any{"taskId": task.ID, "orderId": task.OrderID, "purchaseOrderId": task.PONumber, "poNumber": task.PONumber, "supplier": task.Supplier, "status": task.Status, "warehouseId": task.WarehouseID, "assignedOperatorId": task.OperatorID, "version": task.Version, "expectedQuantity": expected, "receivedQuantity": received, "remainingQuantity": expected - received, "quantityPolicy": task.Policy, "conditionPolicy": task.Policy.ConditionPolicy, "lines": lines, "updatedAt": task.UpdatedAt, "asOf": task.UpdatedAt}
 }
@@ -864,7 +1027,7 @@ func writeError(w http.ResponseWriter, err error, correlationID string) {
 	switch domainError.Code {
 	case "INVALID_REQUEST", "DEVICE_NOT_REGISTERED":
 		status = http.StatusBadRequest
-	case "AUTH_INVALID_CREDENTIALS", "AUTH_SESSION_EXPIRED", "AUTH_TOKEN_INVALID", "AUTH_TOKEN_REVOKED":
+	case "AUTH_INVALID_CREDENTIALS", "AUTH_SESSION_EXPIRED", "AUTH_TOKEN_INVALID", "AUTH_TOKEN_REVOKED", "UPSTREAM_UNAUTHORIZED":
 		status = http.StatusUnauthorized
 	case "AUTH_ACCOUNT_LOCKED":
 		status = http.StatusTooManyRequests
@@ -876,12 +1039,24 @@ func writeError(w http.ResponseWriter, err error, correlationID string) {
 		status = http.StatusTooManyRequests
 	case "GATEWAY_CIRCUIT_OPEN", "UPSTREAM_WMS_UNAVAILABLE", "MESSAGING_PUBLISH_PENDING":
 		status = http.StatusServiceUnavailable
-	case "TASK_LOCKED", "TASK_VERSION_CONFLICT", "SHIPMENT_VERSION_CONFLICT", "DUPLICATE_COMMAND", "IDEMPOTENCY_KEY_REUSED", "VERSION_CONFLICT", "IDEMPOTENCY_CONFLICT", "RECEIPT_NOT_CONFIRMABLE", "OVER_RECEIPT_APPROVAL_REQUIRED":
+	case "TASK_LOCKED", "TASK_VERSION_CONFLICT", "SHIPMENT_VERSION_CONFLICT", "DUPLICATE_COMMAND", "IDEMPOTENCY_KEY_REUSED", "VERSION_CONFLICT", "IDEMPOTENCY_CONFLICT", "RECEIPT_NOT_CONFIRMABLE", "OVER_RECEIPT_APPROVAL_REQUIRED", "UPSTREAM_CONFLICT":
 		status = http.StatusConflict
-	case "TASK_NOT_FOUND", "INVENTORY_NOT_FOUND", "SHIPMENT_NOT_FOUND", "COMMAND_NOT_FOUND":
+	case "TASK_NOT_FOUND", "INVENTORY_NOT_FOUND", "SHIPMENT_NOT_FOUND", "COMMAND_NOT_FOUND", "RECEIPT_NOT_FOUND", "UPSTREAM_NOT_FOUND":
 		status = http.StatusNotFound
-	case "BARCODE_UNKNOWN", "BARCODE_WRONG_CONTEXT", "QUANTITY_EXCEEDS_ALLOWED", "REMARK_REQUIRED", "CONDITION_INVALID", "RECEIVING_TASK_INCOMPLETE", "TASK_NOT_ASSIGNED", "TASK_ALREADY_COMPLETED", "SOURCE_LOCATION_INVALID", "DESTINATION_LOCATION_INVALID", "ITEM_INVALID", "VALIDATION_SEQUENCE_INVALID", "INSUFFICIENT_STOCK", "LOCATION_CAPACITY_EXCEEDED", "TASK_INCOMPLETE", "SOURCE_EQUALS_DESTINATION", "SHIPMENT_NOT_READY", "PACKAGE_INCOMPLETE", "CARRIER_INVALID", "TRACKING_INVALID", "SHIPMENT_ALREADY_CONFIRMED", "COUNT_VARIANCE_REQUIRES_REVIEW", "ITEM_NOT_IN_DOCUMENT", "LOCATION_INVALID", "RECEIPT_LINE_MISMATCH", "RECEIPT_QUANTITY_INVALID":
+	case "BARCODE_UNKNOWN", "BARCODE_WRONG_CONTEXT", "QUANTITY_EXCEEDS_ALLOWED", "REMARK_REQUIRED", "CONDITION_INVALID", "RECEIVING_TASK_INCOMPLETE", "TASK_NOT_ASSIGNED", "TASK_ALREADY_COMPLETED", "SOURCE_LOCATION_INVALID", "DESTINATION_LOCATION_INVALID", "ITEM_INVALID", "VALIDATION_SEQUENCE_INVALID", "INSUFFICIENT_STOCK", "LOCATION_CAPACITY_EXCEEDED", "TASK_INCOMPLETE", "SOURCE_EQUALS_DESTINATION", "SHIPMENT_NOT_READY", "PACKAGE_INCOMPLETE", "CARRIER_INVALID", "TRACKING_INVALID", "SHIPMENT_ALREADY_CONFIRMED", "COUNT_VARIANCE_REQUIRES_REVIEW", "ITEM_NOT_IN_DOCUMENT", "LOCATION_INVALID", "RECEIPT_LINE_MISMATCH", "RECEIPT_QUANTITY_INVALID", "RECEIPT_BATCH_LINE_INVALID", "RECEIPT_BATCH_LINES_INCOMPLETE", "RECEIPT_BATCH_DUPLICATE_LINE", "RECEIPT_LOT_DIMENSION_MISMATCH", "RECEIPT_LINE_FAILED_FINAL", "INVALID_INVENTORY_REQUEST":
 		status = http.StatusUnprocessableEntity
+	case "RECEIPT_VERSION_REQUIRED":
+		status = http.StatusBadRequest
+	case "RECEIPT_NOT_EDITABLE", "RECEIPT_NOT_CLAIMABLE":
+		status = http.StatusConflict
+	}
+	// Only an explicit dependency outage may affect the gateway-wide breaker.
+	// An UPSTREAM_HTTP_ERROR is route-scoped: optional WMS capabilities can
+	// legitimately be unavailable while Receiving, authentication, and SSE
+	// remain healthy. Treating every upstream 5xx as a global outage causes an
+	// unrelated read to make the Receiving workflow return GATEWAY_CIRCUIT_OPEN.
+	if domainError.Code == "UPSTREAM_WMS_UNAVAILABLE" || domainError.Code == "MESSAGING_PUBLISH_PENDING" {
+		w.Header().Set("X-Gateway-Dependency-Failure", "1")
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)

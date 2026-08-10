@@ -1,6 +1,9 @@
 package ports
 
-import "context"
+import (
+	"context"
+	"time"
+)
 
 type Warehouse struct{ ID, Code, Name string }
 
@@ -22,6 +25,7 @@ type InboundAdapter interface {
 	GetReceipt(context.Context, string) (Receipt, error)
 	RecordReceiptQuantity(context.Context, string, string, ReceiptQuantityRequest) (ReceiptQuantityResult, error)
 	ConfirmReceipt(context.Context, string, string) (ReceiptConfirmation, error)
+	ReceiveReceipt(context.Context, string, ReceiptBatchRequest) (ReceiptBatchResult, error)
 }
 
 type Location struct {
@@ -34,19 +38,24 @@ type Location struct {
 type ReceiptQuery struct {
 	Status              string
 	WarehouseLocationID string
+	AssignedOperatorID  string
 	Query               string
 	Limit               int
 }
 
 type ReceiptSummary struct {
-	ReceiptID           string  `json:"receipt_id"`
-	ReceiptCode         string  `json:"receipt_code"`
-	WarehouseLocationID string  `json:"warehouse_location_id"`
-	Status              string  `json:"status"`
-	ConfirmationStatus  string  `json:"confirmation_status"`
-	LineCount           int     `json:"line_count"`
-	AssignedOperatorID  *string `json:"assigned_operator_id"`
-	AssignmentStatus    string  `json:"assignment_status"`
+	ReceiptID           string        `json:"receipt_id"`
+	ReceiptCode         string        `json:"receipt_code"`
+	WarehouseLocationID string        `json:"warehouse_location_id"`
+	Status              string        `json:"status"`
+	ConfirmationStatus  string        `json:"confirmation_status"`
+	LineCount           int           `json:"line_count"`
+	Lines               []ReceiptLine `json:"lines"`
+	AssignedOperatorID  *string       `json:"assigned_operator_id"`
+	AssignmentStatus    string        `json:"assignment_status"`
+	AssignmentVersion   int64         `json:"assignment_version"`
+	CreatedAt           time.Time     `json:"created_at"`
+	UpdatedAt           time.Time     `json:"updated_at"`
 }
 
 type Receipt struct {
@@ -58,6 +67,7 @@ type Receipt struct {
 	AssignedOperatorID  *string       `json:"assigned_operator_id"`
 	AssignmentStatus    string        `json:"assignment_status"`
 	AssignmentVersion   int64         `json:"assignment_version"`
+	UpdatedAt           time.Time     `json:"updated_at"`
 	Lines               []ReceiptLine `json:"lines"`
 }
 
@@ -97,4 +107,27 @@ type ReceiptQuantityResult struct {
 	ActualQuantity float64 `json:"actual_quantity"`
 	UOMCode        string  `json:"uom_code"`
 	Version        int     `json:"version"`
+}
+
+type ReceiptBatchLine struct {
+	LineID         string  `json:"line_id"`
+	ActualQuantity float64 `json:"actual_quantity"`
+	UOMCode        string  `json:"uom_code"`
+	ItemRevisionID string  `json:"item_revision_id"`
+	LotCode        string  `json:"lot_code"`
+}
+
+type ReceiptBatchRequest struct {
+	CommandID              string             `json:"command_id"`
+	ExpectedReceiptVersion int64              `json:"expected_receipt_version"`
+	Lines                  []ReceiptBatchLine `json:"lines"`
+	IdempotencyKey         string             `json:"-"`
+}
+
+type ReceiptBatchResult struct {
+	ReceiptID     string `json:"receipt_id"`
+	Status        string `json:"status"`
+	Result        string `json:"result"`
+	CommandStatus string `json:"command_status"`
+	LineCount     int    `json:"line_count"`
 }
