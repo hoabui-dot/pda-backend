@@ -74,6 +74,7 @@ type Receipt struct {
 type ReceiptLine struct {
 	LineID           string  `json:"line_id"`
 	ItemRevisionID   string  `json:"item_revision_id"`
+	ItemName         string  `json:"item_name"`
 	LotCode          string  `json:"lot_code"`
 	Quantity         float64 `json:"qty"`
 	ReceivedQuantity float64 `json:"received_quantity"`

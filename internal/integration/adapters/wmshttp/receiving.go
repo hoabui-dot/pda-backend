@@ -109,7 +109,7 @@ func mapReceiptTask(receipt ports.Receipt, warehouseID string) receivingdomain.T
 		}
 		expected := int64(line.Expected)
 		received := int64(line.ReceivedQuantity)
-		task.Lines = append(task.Lines, receivingdomain.Line{ID: line.LineID, ItemID: line.ItemRevisionID, Barcode: barcode, ExpectedQuantity: expected, ReceivedQuantity: received, HandedOverQuantity: expected, RemainingQuantity: expected - received, SKU: line.ItemRevisionID, UOMCode: line.UOMCode, LotCode: line.LotCode, LotRequired: line.LotCode != "", SerialRequired: false})
+		task.Lines = append(task.Lines, receivingdomain.Line{ID: line.LineID, ItemID: line.ItemRevisionID, ItemName: line.ItemName, Barcode: barcode, ExpectedQuantity: expected, ReceivedQuantity: received, HandedOverQuantity: expected, RemainingQuantity: expected - received, SKU: line.ItemRevisionID, UOMCode: line.UOMCode, LotCode: line.LotCode, LotRequired: line.LotCode != "", SerialRequired: false})
 	}
 	return task
 }
