@@ -2,6 +2,8 @@ package ports
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"time"
 )
 
@@ -81,6 +83,46 @@ type ReceiptLine struct {
 	Expected         float64 `json:"expected_quantity"`
 	UOMCode          string  `json:"uom_code"`
 	Version          int     `json:"row_version"`
+}
+
+// UnmarshalJSON keeps the PDA-side contract as a plain display string while
+// accepting both the legacy WMS string snapshot and the localized object
+// emitted by current Inbound responses.
+func (line *ReceiptLine) UnmarshalJSON(data []byte) error {
+	type alias ReceiptLine
+	var envelope struct {
+		*alias
+		ItemName json.RawMessage `json:"item_name"`
+	}
+	envelope.alias = (*alias)(line)
+	if err := json.Unmarshal(data, &envelope); err != nil {
+		return err
+	}
+	if len(envelope.ItemName) == 0 || string(envelope.ItemName) == "null" {
+		return nil
+	}
+	var name string
+	if err := json.Unmarshal(envelope.ItemName, &name); err == nil {
+		line.ItemName = name
+		return nil
+	}
+	var localized map[string]string
+	if err := json.Unmarshal(envelope.ItemName, &localized); err != nil {
+		return fmt.Errorf("item_name must be a string or localized object: %w", err)
+	}
+	for _, key := range []string{"vi", "en", "ja", "ko"} {
+		if value := localized[key]; value != "" {
+			line.ItemName = value
+			return nil
+		}
+	}
+	for _, value := range localized {
+		if value != "" {
+			line.ItemName = value
+			break
+		}
+	}
+	return nil
 }
 
 type ReceiptConfirmation struct {

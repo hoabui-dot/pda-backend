@@ -167,6 +167,32 @@ func TestReceivingListReturnsOwnerLineSnapshot(t *testing.T) {
 	}
 }
 
+func TestReceivingListAcceptsLocalizedItemNameSnapshot(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == inboundReceiptsPath:
+			_, _ = w.Write([]byte(`{"data":[{"receipt_id":"r-localized","receipt_code":"RCV-LOCALIZED","warehouse_location_id":"loc-1","status":"Draft","assigned_operator_id":"op-1","assignment_status":"CLAIMED","lines":[{"line_id":"line-1","item_revision_id":"item-1","item_name":{"vi":"Cao su carbon", "en":"Carbon black"},"lot_code":"LOT-1","expected_quantity":3}]}]}`))
+		case r.Method == http.MethodGet && r.URL.Path == locationPath+"/loc-1":
+			_, _ = w.Write([]byte(`{"location_id":"loc-1","warehouse_id":"wh-1","warehouse_code":"MAIN"}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	client, err := New(server.URL, "test-token", server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	page, err := NewReceivingAdapter(client).List(context.Background(), receivingports.Filter{WarehouseID: "wh-1", OperatorID: "op-1", Limit: 20}, platform.ActorContext{OperatorID: "op-1", WarehouseID: "wh-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Items) != 1 || len(page.Items[0].Lines) != 1 || page.Items[0].Lines[0].ItemName != "Cao su carbon" {
+		t.Fatalf("localized item name was not mapped: %+v", page.Items)
+	}
+}
+
 func TestReceivingListKeepsCompletedReceiptForHistory(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
