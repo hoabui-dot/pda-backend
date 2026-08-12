@@ -15,6 +15,7 @@ import (
 
 	"github.com/company/pda-backend/internal/integration/ports"
 	platform "github.com/company/pda-backend/internal/platform/domain"
+	"github.com/google/uuid"
 )
 
 const warehousePath = "/api/wms/master-data/warehouses"
@@ -83,6 +84,27 @@ func (c *Client) CanonicalWarehouse(value string) string {
 		return canonical
 	}
 	return value
+}
+
+// CanonicalWarehouseID resolves the PDA-facing warehouse alias/code to the
+// UUID required by WMS owner APIs. It deliberately resolves through the WMS
+// Master Data contract instead of maintaining a second warehouse directory in
+// PDA Backend.
+func (c *Client) CanonicalWarehouseID(ctx context.Context, value string) (string, error) {
+	value = c.CanonicalWarehouse(value)
+	if _, err := uuid.Parse(value); err == nil {
+		return value, nil
+	}
+	warehouses, err := c.Warehouses(ctx)
+	if err != nil {
+		return "", fmt.Errorf("resolve WMS warehouse %q: %w", value, err)
+	}
+	for _, warehouse := range warehouses {
+		if strings.EqualFold(warehouse.Code, value) {
+			return warehouse.ID, nil
+		}
+	}
+	return "", fmt.Errorf("WMS warehouse %q was not found", value)
 }
 
 func parseWarehouseAliases(raw string) map[string]string {
@@ -364,7 +386,11 @@ type executionTaskCommand struct {
 }
 
 func (c *Client) ListExecutionTasks(ctx context.Context, warehouseID, operatorID, category, status, query string, limit int) ([]executionTask, error) {
-	warehouseID = c.CanonicalWarehouse(warehouseID)
+	var err error
+	warehouseID, err = c.CanonicalWarehouseID(ctx, warehouseID)
+	if err != nil {
+		return nil, err
+	}
 	params := url.Values{}
 	if warehouseID != "" {
 		params.Set("warehouse_id", warehouseID)
@@ -540,7 +566,11 @@ type cycleCountTask struct {
 }
 
 func (c *Client) ListCycleCounts(ctx context.Context, warehouseID, operatorID, status string) ([]cycleCountTask, error) {
-	warehouseID = c.CanonicalWarehouse(warehouseID)
+	var err error
+	warehouseID, err = c.CanonicalWarehouseID(ctx, warehouseID)
+	if err != nil {
+		return nil, err
+	}
 	params := url.Values{"warehouse_id": []string{warehouseID}}
 	if operatorID != "" {
 		params.Set("operator_id", operatorID)
