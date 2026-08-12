@@ -61,11 +61,34 @@ func (r *Router) taskEvents(w http.ResponseWriter, req *http.Request) {
 		lastDigest = digest
 		r.logger.Info("sse_task_snapshot", "operatorId", actor.OperatorID, "warehouseId", actor.WarehouseID, "taskCount", len(page.Tasks), "digest", digest[:16], "correlationId", correlation(req.Context()))
 		for _, task := range page.Tasks {
+			notificationType := "TASK_UPDATED"
+			notificationTitle := "Warehouse task updated"
+			notificationMessage := fmt.Sprintf("Task %s requires attention", task.Title)
+			if task.Status == "NEW" || task.Status == "ASSIGNED" || (task.Status == "IN_PROGRESS" && task.OperatorID != nil && *task.OperatorID != "") {
+				notificationType = "TASK_ASSIGNED"
+				notificationTitle = "New warehouse task"
+				notificationMessage = fmt.Sprintf("Task %s has been assigned to you", task.Title)
+			}
+			if task.Status == "CANCELLED" {
+				notificationType = "TASK_CANCELLED"
+				notificationTitle = "Warehouse task cancelled"
+				notificationMessage = fmt.Sprintf("Task %s has been cancelled", task.Title)
+			}
 			data, _ := json.Marshal(map[string]any{
 				"eventId":   fmt.Sprintf("task:%s:%s", task.ID, digest[:16]),
 				"eventType": "TASK_UPDATED", "aggregateType": task.Category,
 				"aggregateId": task.ID, "aggregateVersion": task.Version,
 				"operatorId": task.OperatorID, "data": task,
+				"notification": map[string]any{
+					"id":           fmt.Sprintf("task:%s", task.ID),
+					"type":         notificationType,
+					"title":        notificationTitle,
+					"message":      notificationMessage,
+					"priority":     "NORMAL",
+					"entityType":   task.Category,
+					"entityId":     task.ID,
+					"businessCode": task.Title,
+				},
 			})
 			_, _ = fmt.Fprintf(w, "id: task:%s:%s\nevent: TASK_UPDATED\ndata: %s\n\n", task.ID, digest[:16], data)
 			flusher.Flush()
