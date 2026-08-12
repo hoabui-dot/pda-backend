@@ -23,7 +23,7 @@ type ReceivingAdapter struct{ client *Client }
 func NewReceivingAdapter(client *Client) *ReceivingAdapter { return &ReceivingAdapter{client: client} }
 
 func (a *ReceivingAdapter) List(ctx context.Context, f receivingports.Filter, actor platform.ActorContext) (receivingports.Page, error) {
-	rows, err := a.client.ListReceipts(ctx, ports.ReceiptQuery{Status: f.Status, AssignedOperatorID: f.OperatorID, Limit: f.Limit})
+	rows, err := a.client.ListReceipts(ctx, ports.ReceiptQuery{Status: f.Status, AssignedOperatorID: f.OperatorID, Query: f.Query, Limit: f.Limit})
 	if err != nil {
 		return receivingports.Page{}, err
 	}

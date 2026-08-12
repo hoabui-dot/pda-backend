@@ -42,7 +42,7 @@ func (a *TaskAdapter) List(ctx context.Context, filter executionports.TaskFilter
 		}
 	}
 	if a.receiving != nil && (filter.Category == "" || strings.EqualFold(filter.Category, string(executiondomain.CategoryReceiving))) {
-		page, receivingErr := a.receiving.List(ctx, receivingports.Filter{WarehouseID: actor.WarehouseID, OperatorID: actor.OperatorID, Status: filter.Status, Limit: filter.Limit}, actor)
+		page, receivingErr := a.receiving.List(ctx, receivingports.Filter{WarehouseID: actor.WarehouseID, OperatorID: actor.OperatorID, Status: filter.Status, Query: filter.Query, Limit: filter.Limit}, actor)
 		if receivingErr != nil {
 			return executionports.TaskPage{}, receivingErr
 		}

@@ -11,8 +11,8 @@ import (
 )
 
 type Filter struct {
-	WarehouseID, OperatorID, Status, Cursor string
-	Limit                                   int
+	WarehouseID, OperatorID, Status, Query, Cursor string
+	Limit                                          int
 }
 type Page struct {
 	Items      []domain.Task `json:"items"`
