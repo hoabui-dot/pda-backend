@@ -9,6 +9,8 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/url"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -461,7 +463,8 @@ func (r *Router) bootstrap(w http.ResponseWriter, req *http.Request) {
 		writeError(w, err, correlation(req.Context()))
 		return
 	}
-	writeData(w, http.StatusOK, map[string]any{"operatorId": operator.ID, "employeeCode": operator.EmployeeCode, "displayName": operator.DisplayName, "roles": operator.Roles, "permissions": operator.Permissions, "warehouseId": req.Header.Get("X-Warehouse-Id"), "warehouses": warehouses, "shiftCode": operator.ShiftCode, "deviceId": req.Header.Get("X-Device-Id"), "deviceRegistrationStatus": deviceStatus, "featureFlags": map[string]bool{}, "scannerPolicy": map[string]any{}, "localePolicy": []string{"en-US", "vi-VN"}, "serverTime": r.now().UTC()}, correlation(req.Context()), r.now())
+	assignments := r.operatorAssignments(req.Context(), operator, warehouses)
+	writeData(w, http.StatusOK, map[string]any{"operatorId": operator.ID, "employeeCode": operator.EmployeeCode, "displayName": operator.DisplayName, "roles": operator.Roles, "permissions": operator.Permissions, "warehouseId": req.Header.Get("X-Warehouse-Id"), "warehouses": warehouses, "warehouseAssignments": assignments.Warehouses, "areaAssignments": assignments.Areas, "shiftCode": operator.ShiftCode, "deviceId": req.Header.Get("X-Device-Id"), "deviceRegistrationStatus": deviceStatus, "featureFlags": map[string]bool{}, "scannerPolicy": map[string]any{}, "localePolicy": []string{"en-US", "vi-VN"}, "serverTime": r.now().UTC()}, correlation(req.Context()), r.now())
 }
 
 func (r *Router) sessionData(ctx context.Context, operator identity.Operator, session identityapp.Session, deviceID, warehouseID string) (map[string]any, error) {
@@ -480,7 +483,140 @@ func (r *Router) sessionData(ctx context.Context, operator identity.Operator, se
 	if err != nil {
 		return nil, err
 	}
-	return map[string]any{"accessToken": session.AccessToken, "refreshToken": session.RefreshToken, "tokenType": "Bearer", "expiresAt": session.ExpiresAt.UTC(), "operatorId": operator.ID, "employeeCode": operator.EmployeeCode, "displayName": operator.DisplayName, "username": operator.Username, "roles": operator.Roles, "permissions": operator.Permissions, "warehouseId": warehouseID, "warehouseName": warehouseName, "shiftCode": operator.ShiftCode, "deviceRegistrationStatus": deviceStatus, "featureFlags": map[string]bool{}, "scannerPolicy": map[string]any{}, "localePolicy": []string{"en-US", "vi-VN"}}, nil
+	assignments := r.operatorAssignments(ctx, operator, warehouses)
+	return map[string]any{"accessToken": session.AccessToken, "refreshToken": session.RefreshToken, "tokenType": "Bearer", "expiresAt": session.ExpiresAt.UTC(), "operatorId": operator.ID, "employeeCode": operator.EmployeeCode, "displayName": operator.DisplayName, "username": operator.Username, "roles": operator.Roles, "permissions": operator.Permissions, "warehouseId": warehouseID, "warehouseName": warehouseName, "warehouseAssignments": assignments.Warehouses, "areaAssignments": assignments.Areas, "shiftCode": operator.ShiftCode, "deviceRegistrationStatus": deviceStatus, "featureFlags": map[string]bool{}, "scannerPolicy": map[string]any{}, "localePolicy": []string{"en-US", "vi-VN"}}, nil
+}
+
+type operatorAssignments struct {
+	Warehouses []map[string]string
+	Areas      []map[string]string
+}
+
+// operatorAssignments reads the authoritative WMS Master Data entitlement
+// when configured. Authentication remains owned by PDA Backend; this is only
+// a read-through projection for the profile screen and safely falls back to
+// the identity warehouse list when the optional enrichment is unavailable.
+func (r *Router) operatorAssignments(ctx context.Context, operator identity.Operator, warehouses []identity.Warehouse) operatorAssignments {
+	out := operatorAssignments{Warehouses: make([]map[string]string, 0, len(warehouses)), Areas: []map[string]string{}}
+	for _, warehouse := range warehouses {
+		out.Warehouses = append(out.Warehouses, map[string]string{"id": warehouse.ID, "name": warehouse.Name})
+	}
+	base := strings.TrimRight(os.Getenv("PDA_UPSTREAM_WMS_BASE_URL"), "/")
+	if base == "" {
+		return out
+	}
+	endpoint := base + "/api/wms/master-data/operator-access/operators?account_type=PDA_APP&login_username=" + url.QueryEscape(operator.Username) + "&limit=1"
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return out
+	}
+	req.Header.Set("X-Calling-Service", "PDA_BACKEND")
+	if token := strings.TrimSpace(os.Getenv("PDA_UPSTREAM_WMS_SERVICE_TOKEN")); token != "" {
+		req.Header.Set("X-Service-Token", token)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return out
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return out
+	}
+	var payload struct {
+		Data []struct {
+			WarehouseIDs         []string `json:"warehouse_ids"`
+			ZoneIDs              []string `json:"zone_ids"`
+			WarehouseAssignments []struct {
+				ID   string          `json:"id"`
+				Name json.RawMessage `json:"name"`
+			} `json:"warehouse_assignments"`
+			ZoneAssignments []struct {
+				ID   string          `json:"id"`
+				Name json.RawMessage `json:"name"`
+			} `json:"zone_assignments"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&payload); err != nil || len(payload.Data) == 0 {
+		return out
+	}
+	warehouseNames := make(map[string]string, len(warehouses))
+	for _, warehouse := range warehouses {
+		warehouseNames[warehouse.ID] = warehouse.Name
+	}
+	assignment := payload.Data[0]
+	if len(assignment.WarehouseAssignments) > 0 {
+		out.Warehouses = make([]map[string]string, 0, len(assignment.WarehouseAssignments))
+		for _, item := range assignment.WarehouseAssignments {
+			name := localizedAssignmentName(item.Name)
+			if name == "" {
+				name = warehouseNames[item.ID]
+			}
+			out.Warehouses = append(out.Warehouses, map[string]string{"id": item.ID, "name": name})
+		}
+	} else {
+		out.Warehouses = make([]map[string]string, 0, len(assignment.WarehouseIDs))
+		for _, id := range assignment.WarehouseIDs {
+			out.Warehouses = append(out.Warehouses, map[string]string{"id": id, "name": warehouseNames[id]})
+		}
+	}
+	if len(assignment.ZoneAssignments) > 0 {
+		for _, item := range assignment.ZoneAssignments {
+			name := localizedAssignmentName(item.Name)
+			if name == "" {
+				name = item.ID
+			}
+			out.Areas = append(out.Areas, map[string]string{"id": item.ID, "name": name})
+		}
+		return out
+	}
+	for _, id := range assignment.ZoneIDs {
+		name := id
+		zoneReq, zoneErr := http.NewRequestWithContext(ctx, http.MethodGet, base+"/api/wms/master-data/zones/"+url.PathEscape(id), nil)
+		if zoneErr == nil {
+			zoneReq.Header.Set("X-Calling-Service", "PDA_BACKEND")
+			if token := strings.TrimSpace(os.Getenv("PDA_UPSTREAM_WMS_SERVICE_TOKEN")); token != "" {
+				zoneReq.Header.Set("X-Service-Token", token)
+			}
+			if zoneResp, requestErr := http.DefaultClient.Do(zoneReq); requestErr == nil {
+				var zone struct {
+					Code string          `json:"zone_code"`
+					Name json.RawMessage `json:"zone_name"`
+				}
+				if zoneResp.StatusCode >= 200 && zoneResp.StatusCode < 300 && json.NewDecoder(io.LimitReader(zoneResp.Body, 1<<20)).Decode(&zone) == nil {
+					if localized := localizedAssignmentName(zone.Name); localized != "" {
+						name = localized
+					} else if strings.TrimSpace(zone.Code) != "" {
+						name = zone.Code
+					}
+				}
+				zoneResp.Body.Close()
+			}
+		}
+		out.Areas = append(out.Areas, map[string]string{"id": id, "name": name})
+	}
+	return out
+}
+
+func localizedAssignmentName(raw json.RawMessage) string {
+	var plain string
+	if json.Unmarshal(raw, &plain) == nil {
+		return strings.TrimSpace(plain)
+	}
+	var values map[string]string
+	if json.Unmarshal(raw, &values) != nil {
+		return ""
+	}
+	for _, locale := range []string{"vi", "en", "ja", "ko"} {
+		if value := strings.TrimSpace(values[locale]); value != "" {
+			return value
+		}
+	}
+	for _, value := range values {
+		if value = strings.TrimSpace(value); value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func (r *Router) actor(req *http.Request) platform.ActorContext {
