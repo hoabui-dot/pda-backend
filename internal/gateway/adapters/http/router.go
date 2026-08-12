@@ -799,7 +799,7 @@ func (r *Router) releaseTask(w http.ResponseWriter, req *http.Request) {
 
 func (r *Router) receivingList(w http.ResponseWriter, req *http.Request) {
 	limit, _ := strconv.Atoi(req.URL.Query().Get("limit"))
-	page, err := r.receiving.List(req.Context(), receivingports.Filter{WarehouseID: req.Header.Get("X-Warehouse-Id"), Status: req.URL.Query().Get("status"), Cursor: req.URL.Query().Get("cursor"), Limit: limit}, r.actor(req))
+	page, err := r.receiving.List(req.Context(), receivingports.Filter{WarehouseID: req.Header.Get("X-Warehouse-Id"), Status: req.URL.Query().Get("status"), Query: req.URL.Query().Get("q"), Cursor: req.URL.Query().Get("cursor"), Limit: limit}, r.actor(req))
 	if err != nil {
 		writeError(w, err, correlation(req.Context()))
 		return
