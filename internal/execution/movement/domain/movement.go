@@ -43,11 +43,14 @@ type Task struct {
 	DestinationLocation  string    `json:"destinationLocation"`
 	ItemID               string    `json:"itemId"`
 	Barcode              string    `json:"barcode"`
+	Lot                  string    `json:"lot,omitempty"`
 	RequiredQuantity     int64     `json:"requiredQuantity"`
 	CompletedQuantity    int64     `json:"completedQuantity"`
 	SourceValidated      bool      `json:"sourceValidated"`
 	DestinationValidated bool      `json:"destinationValidated"`
 	ItemValidated        bool      `json:"itemValidated"`
+	LotValidated         bool      `json:"lotValidated"`
+	ScanRequirements     []string  `json:"scanRequirements,omitempty"`
 	UpdatedAt            time.Time `json:"updatedAt"`
 }
 
@@ -109,11 +112,27 @@ func (t *Task) ValidateItem(operator, barcode string, base int64, now time.Time)
 	t.UpdatedAt = now.UTC()
 	return nil
 }
+func (t *Task) ValidateLot(operator, lot string, base int64, now time.Time) error {
+	if err := t.guard(operator, base); err != nil {
+		return err
+	}
+	if !t.SourceValidated || !t.ItemValidated {
+		return ErrSequence
+	}
+	if t.Lot != "" && lot != t.Lot {
+		return &platform.DomainError{Code: "LOT_INVALID", SafeMessage: "Lot is not assigned to this putaway task"}
+	}
+	t.LotValidated = true
+	t.Status = InProgress
+	t.Version++
+	t.UpdatedAt = now.UTC()
+	return nil
+}
 func (t *Task) Move(operator string, quantity, base int64, now time.Time) error {
 	if err := t.guard(operator, base); err != nil {
 		return err
 	}
-	if !t.SourceValidated || !t.DestinationValidated || (t.Workflow != Putaway && !t.ItemValidated) {
+	if !t.SourceValidated || !t.ItemValidated || !t.DestinationValidated || (t.Lot != "" && !t.LotValidated) {
 		return ErrSequence
 	}
 	if quantity <= 0 || quantity > t.Remaining() {

@@ -40,6 +40,8 @@ type PutawayOperations interface {
 	Detail(context.Context, string, platform.ActorContext) (movementdomain.Task, error)
 	Suggestions(context.Context, string, platform.ActorContext) ([]movementdomain.Location, error)
 	ValidateSource(context.Context, movementapp.Command, string) (movementdomain.Task, error)
+	ValidateItem(context.Context, movementapp.Command, string) (movementdomain.Task, error)
+	ValidateLot(context.Context, movementapp.Command, string) (movementdomain.Task, error)
 	ValidateDestination(context.Context, movementapp.Command, string) (movementdomain.Task, error)
 	Confirm(context.Context, movementapp.Command, int64) (movementdomain.Task, error)
 }

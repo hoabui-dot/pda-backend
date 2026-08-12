@@ -87,9 +87,11 @@ func TestMovementPDAAPIMapping(t *testing.T) {
 		}
 	}
 	step("/api/pda/v1/putaway/tasks/PUT-001/source-validations", `{"location":"STAGE-01"}`, 1)
-	step("/api/pda/v1/putaway/tasks/PUT-001/destination-validations", `{"location":"BULK-01"}`, 2)
-	step("/api/pda/v1/putaway/tasks/PUT-001/confirmation", `{"quantity":5}`, 3)
-	if len(events.All(ctx)) != 3 {
+	step("/api/pda/v1/putaway/tasks/PUT-001/item-validations", `{"value":"PUT-ITEM-001"}`, 2)
+	step("/api/pda/v1/putaway/tasks/PUT-001/lot-validations", `{"value":"LOT-001"}`, 3)
+	step("/api/pda/v1/putaway/tasks/PUT-001/destination-validations", `{"location":"BULK-01"}`, 4)
+	step("/api/pda/v1/putaway/tasks/PUT-001/confirmation", `{"quantity":5}`, 5)
+	if len(events.All(ctx)) != 5 {
 		t.Fatalf("events=%d", len(events.All(ctx)))
 	}
 }

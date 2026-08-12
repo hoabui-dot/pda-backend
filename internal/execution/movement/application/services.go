@@ -104,6 +104,12 @@ func (s *PutawayService) Suggestions(c context.Context, id string, a platform.Ac
 func (s *PutawayService) ValidateSource(c context.Context, x Command, v string) (domain.Task, error) {
 	return mutate(c, s.d, domain.Putaway, x, "PutawayTaskStarted", func(t *domain.Task) error { return t.ValidateSource(x.Actor.OperatorID, v, x.BaseVersion, s.d.now()) }, 0)
 }
+func (s *PutawayService) ValidateItem(c context.Context, x Command, v string) (domain.Task, error) {
+	return mutate(c, s.d, domain.Putaway, x, "PutawayItemValidated", func(t *domain.Task) error { return t.ValidateItem(x.Actor.OperatorID, v, x.BaseVersion, s.d.now()) }, 0)
+}
+func (s *PutawayService) ValidateLot(c context.Context, x Command, v string) (domain.Task, error) {
+	return mutate(c, s.d, domain.Putaway, x, "PutawayLotValidated", func(t *domain.Task) error { return t.ValidateLot(x.Actor.OperatorID, v, x.BaseVersion, s.d.now()) }, 0)
+}
 func (s *PutawayService) ValidateDestination(c context.Context, x Command, v string) (domain.Task, error) {
 	return mutate(c, s.d, domain.Putaway, x, "PutawayDestinationValidated", func(t *domain.Task) error {
 		return t.ValidateDestination(x.Actor.OperatorID, v, x.BaseVersion, s.d.now())

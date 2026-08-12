@@ -49,7 +49,7 @@ func movementValue(q *http.Request) (string, error) {
 	if err := validateMovementMirrors(q, x.TaskID, x.CommandID, x.IdempotencyKey, x.BaseVersion); err != nil {
 		return "", err
 	}
-	if x.ScanContext != "" && x.ScanContext != "PUTAWAY_SOURCE" && x.ScanContext != "PUTAWAY_ITEM" && x.ScanContext != "PUTAWAY_DESTINATION" && x.ScanContext != "PICKING_LOCATION" && x.ScanContext != "PICKING_ITEM" && x.ScanContext != "REPLENISHMENT_SOURCE" && x.ScanContext != "REPLENISHMENT_ITEM" && x.ScanContext != "REPLENISHMENT_DESTINATION" {
+	if x.ScanContext != "" && x.ScanContext != "PUTAWAY_SOURCE" && x.ScanContext != "PUTAWAY_ITEM" && x.ScanContext != "PUTAWAY_LOT" && x.ScanContext != "PUTAWAY_DESTINATION" && x.ScanContext != "PICKING_LOCATION" && x.ScanContext != "PICKING_ITEM" && x.ScanContext != "REPLENISHMENT_SOURCE" && x.ScanContext != "REPLENISHMENT_ITEM" && x.ScanContext != "REPLENISHMENT_DESTINATION" {
 		return "", &platform.DomainError{Code: "BARCODE_WRONG_CONTEXT", SafeMessage: "Scanner context is invalid"}
 	}
 	if x.NormalizedValue != "" {
@@ -141,10 +141,12 @@ func movementView(task movementdomain.Task) map[string]any {
 	next := "CONFIRM_QUANTITY"
 	if !task.SourceValidated {
 		next = "VALIDATE_SOURCE"
+	} else if !task.ItemValidated {
+		next = "VALIDATE_ITEM"
+	} else if task.Lot != "" && !task.LotValidated {
+		next = "VALIDATE_LOT"
 	} else if !task.DestinationValidated {
 		next = "VALIDATE_DESTINATION"
-	} else if task.Workflow != movementdomain.Putaway && !task.ItemValidated {
-		next = "VALIDATE_ITEM"
 	} else if task.Status == movementdomain.Completed {
 		next = "COMPLETED"
 	}
@@ -201,6 +203,16 @@ func (r *Router) putawaySuggestions(w http.ResponseWriter, q *http.Request) {
 func (r *Router) putawaySource(w http.ResponseWriter, q *http.Request) {
 	r.movementValidation(w, q, func(c movementapp.Command, v string) (movementdomain.Task, error) {
 		return r.putaway.ValidateSource(q.Context(), c, v)
+	})
+}
+func (r *Router) putawayItem(w http.ResponseWriter, q *http.Request) {
+	r.movementValidation(w, q, func(c movementapp.Command, v string) (movementdomain.Task, error) {
+		return r.putaway.ValidateItem(q.Context(), c, v)
+	})
+}
+func (r *Router) putawayLot(w http.ResponseWriter, q *http.Request) {
+	r.movementValidation(w, q, func(c movementapp.Command, v string) (movementdomain.Task, error) {
+		return r.putaway.ValidateLot(q.Context(), c, v)
 	})
 }
 func (r *Router) putawayDestination(w http.ResponseWriter, q *http.Request) {

@@ -194,6 +194,12 @@ func (u putawayAdapter) Suggestions(c context.Context, id string, a platform.Act
 func (u putawayAdapter) ValidateSource(c context.Context, x movementapp.Command, v string) (movementdomain.Task, error) {
 	return Unavailable(u).ValidateSource(c, x, v)
 }
+func (u putawayAdapter) ValidateItem(c context.Context, x movementapp.Command, v string) (movementdomain.Task, error) {
+	return Unavailable(u).ValidateSource(c, x, v)
+}
+func (u putawayAdapter) ValidateLot(c context.Context, x movementapp.Command, v string) (movementdomain.Task, error) {
+	return Unavailable(u).ValidateSource(c, x, v)
+}
 func (u putawayAdapter) ValidateDestination(c context.Context, x movementapp.Command, v string) (movementdomain.Task, error) {
 	return Unavailable(u).ValidateDestination(c, x, v)
 }

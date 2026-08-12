@@ -61,3 +61,24 @@ func TestAssignmentVersionAndSequence(t *testing.T) {
 		t.Fatalf("version %v", e)
 	}
 }
+
+func TestPutawayLotIsValidatedAfterItemBeforeDestination(t *testing.T) {
+	p := task(Putaway)
+	p.Lot = "LOT-001"
+	now := time.Now()
+	if err := p.ValidateSource("OP", "SRC", 1, now); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.ValidateItem("OP", "CODE", 2, now); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.ValidateLot("OP", "WRONG-LOT", 3, now); err == nil {
+		t.Fatal("wrong lot was accepted")
+	}
+	if err := p.ValidateLot("OP", "LOT-001", 3, now); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.ValidateDestination("OP", "DST", 4, now); err != nil {
+		t.Fatal(err)
+	}
+}

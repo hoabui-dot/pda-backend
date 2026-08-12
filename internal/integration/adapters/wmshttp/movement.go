@@ -59,7 +59,12 @@ func mapMovementTask(row executionTask, workflow string) movementdomain.Task {
 	if status == "CREATED" {
 		status = movementdomain.New
 	}
-	return movementdomain.Task{ID: row.TaskID, Workflow: movementdomain.Workflow(workflow), Status: status, WarehouseID: row.WarehouseID, OperatorID: row.AssignedOperatorID, Version: row.Version, UpdatedAt: row.UpdatedAt, RequiredQuantity: int64(number(row.Details, "qty", "quantity", "required_quantity")), CompletedQuantity: int64(number(row.Details, "completed_qty", "picked_qty")), SourceLocation: stringValue(row.Details, "source_location_id", "source_location"), DestinationLocation: stringValue(row.Details, "destination_location_id", "destination_location"), ItemID: stringValue(row.Details, "item_revision_id", "item_id"), Barcode: stringValue(row.Details, "barcode", "item_code")}
+	lot := stringValue(row.Details, "lot_code", "lot_id")
+	requirements := []string{"SOURCE", "ITEM", "DESTINATION"}
+	if lot != "" {
+		requirements = []string{"SOURCE", "ITEM", "LOT", "DESTINATION"}
+	}
+	return movementdomain.Task{ID: row.TaskID, Workflow: movementdomain.Workflow(workflow), Status: status, WarehouseID: row.WarehouseID, OperatorID: row.AssignedOperatorID, Version: row.Version, UpdatedAt: row.UpdatedAt, RequiredQuantity: int64(number(row.Details, "qty", "quantity", "required_quantity")), CompletedQuantity: int64(number(row.Details, "completed_qty", "picked_qty")), SourceLocation: stringValue(row.Details, "source_location_id", "source_location"), DestinationLocation: stringValue(row.Details, "destination_location_id", "destination_location"), ItemID: stringValue(row.Details, "item_revision_id", "item_id"), Barcode: stringValue(row.Details, "barcode", "item_code"), Lot: lot, ScanRequirements: requirements}
 }
 func number(m map[string]any, keys ...string) float64 {
 	for _, k := range keys {
@@ -94,6 +99,12 @@ func (a *PutawayAdapter) Suggestions(context.Context, string, platform.ActorCont
 }
 func (a *PutawayAdapter) ValidateSource(c context.Context, x movementapp.Command, v string) (movementdomain.Task, error) {
 	return a.scan(c, x, "SOURCE", v)
+}
+func (a *PutawayAdapter) ValidateItem(c context.Context, x movementapp.Command, v string) (movementdomain.Task, error) {
+	return a.scan(c, x, "ITEM", v)
+}
+func (a *PutawayAdapter) ValidateLot(c context.Context, x movementapp.Command, v string) (movementdomain.Task, error) {
+	return a.scan(c, x, "LOT", v)
 }
 func (a *PutawayAdapter) ValidateDestination(c context.Context, x movementapp.Command, v string) (movementdomain.Task, error) {
 	return a.scan(c, x, "DESTINATION", v)
