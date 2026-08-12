@@ -40,7 +40,9 @@ type Task struct {
 	OperatorID           *string   `json:"operatorId"`
 	Version              int64     `json:"version"`
 	SourceLocation       string    `json:"sourceLocation"`
+	SourceBin            string    `json:"sourceBin,omitempty"`
 	DestinationLocation  string    `json:"destinationLocation"`
+	DestinationCode      string    `json:"destinationCode,omitempty"`
 	ItemID               string    `json:"itemId"`
 	Barcode              string    `json:"barcode"`
 	Lot                  string    `json:"lot,omitempty"`
@@ -71,7 +73,11 @@ func (t *Task) ValidateSource(operator, value string, base int64, now time.Time)
 	if err := t.guard(operator, base); err != nil {
 		return err
 	}
-	if value != t.SourceLocation {
+	expected := t.SourceLocation
+	if t.SourceBin != "" {
+		expected = t.SourceBin
+	}
+	if value != expected {
 		return ErrSource
 	}
 	t.SourceValidated = true
