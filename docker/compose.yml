@@ -51,7 +51,9 @@ services:
       PDA_UPSTREAM_WMS_MODE: ${PDA_UPSTREAM_WMS_MODE:-http}
       PDA_UPSTREAM_WMS_BASE_URL: ${PDA_UPSTREAM_WMS_BASE_URL:-http://s-factory-wms-wms-public-gateway-1:18000}
       PDA_UPSTREAM_WMS_TOKEN: ${PDA_UPSTREAM_WMS_TOKEN:?PDA_UPSTREAM_WMS_TOKEN is required for HTTP mode}
-      PDA_UPSTREAM_WMS_SERVICE_TOKEN: ${PDA_UPSTREAM_WMS_SERVICE_TOKEN:?PDA_UPSTREAM_WMS_SERVICE_TOKEN is required for HTTP mode}
+      # The WMS public gateway authenticates the caller as PDA_BACKEND. Do not
+      # substitute the WMS internal token here; that is a different identity.
+      PDA_UPSTREAM_WMS_SERVICE_TOKEN: ${PDA_UPSTREAM_WMS_SERVICE_TOKEN:-${PDA_BACKEND_SERVICE_TOKEN:?PDA_BACKEND_SERVICE_TOKEN is required for HTTP mode}}
       # Demo WMS exposes the PDA warehouse as MAIN while Master Data uses its
       # canonical code. Deployments with another warehouse must override this
       # explicit mapping rather than relying on inference.

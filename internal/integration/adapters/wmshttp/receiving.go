@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -23,9 +24,28 @@ type ReceivingAdapter struct{ client *Client }
 func NewReceivingAdapter(client *Client) *ReceivingAdapter { return &ReceivingAdapter{client: client} }
 
 func (a *ReceivingAdapter) List(ctx context.Context, f receivingports.Filter, actor platform.ActorContext) (receivingports.Page, error) {
+	// The operator queue includes both work already assigned to this operator
+	// and unassigned Draft receipts that the operator is allowed to claim. The
+	// owner service remains authoritative for lease/version conflicts.
 	rows, err := a.client.ListReceipts(ctx, ports.ReceiptQuery{Status: f.Status, AssignedOperatorID: f.OperatorID, Query: f.Query, Limit: f.Limit})
 	if err != nil {
 		return receivingports.Page{}, err
+	}
+	available, err := a.client.ListReceipts(ctx, ports.ReceiptQuery{Status: f.Status, Query: f.Query, Limit: f.Limit})
+	if err != nil {
+		return receivingports.Page{}, err
+	}
+	seen := make(map[string]struct{}, len(rows))
+	for _, row := range rows {
+		seen[row.ReceiptID] = struct{}{}
+	}
+	for _, row := range available {
+		if row.AssignedOperatorID == nil && row.Status == "Draft" {
+			if _, exists := seen[row.ReceiptID]; !exists {
+				rows = append(rows, row)
+				seen[row.ReceiptID] = struct{}{}
+			}
+		}
 	}
 	items := make([]receivingdomain.Task, 0, len(rows))
 	for _, row := range rows {
@@ -134,14 +154,10 @@ func receiptTaskStatus(status, confirmationStatus, assignmentStatus string) rece
 }
 
 func (a *ReceivingAdapter) Claim(ctx context.Context, command receivingapp.Command) (receivingdomain.Task, error) {
-	task, err := a.Detail(ctx, command.TaskID, command.Actor)
-	if err != nil {
+	if err := a.client.ClaimReceipt(ctx, command.TaskID, command.Actor.OperatorID, command.IdempotencyKey, 900); err != nil {
 		return receivingdomain.Task{}, err
 	}
-	if task.OperatorID == nil || *task.OperatorID != command.Actor.OperatorID {
-		return receivingdomain.Task{}, receivingdomain.ErrNotAssigned
-	}
-	return task, nil
+	return a.Detail(ctx, command.TaskID, command.Actor)
 }
 
 func (a *ReceivingAdapter) ResolveBarcode(ctx context.Context, taskID, barcode string, actor platform.ActorContext) (receivingdomain.Line, error) {
@@ -211,19 +227,34 @@ func (a *ReceivingAdapter) Confirm(ctx context.Context, command receivingapp.Con
 	if err != nil {
 		return task, err
 	}
-	var selected *ports.ReceiptLine
+	var taskLine *receivingdomain.Line
 	for i := range task.Lines {
 		if task.Lines[i].ID == command.LineID {
-			for _, line := range mustReceiptLines(ctx, a.client, command.TaskID) {
-				if line.LineID == command.LineID {
-					selected = &line
-					break
-				}
-			}
+			taskLine = &task.Lines[i]
+			break
+		}
+	}
+	if taskLine == nil {
+		slog.Warn("pda receiving line not found", "task_id", command.TaskID, "line_id", command.LineID)
+		return receivingdomain.Task{}, receivingdomain.ErrBarcodeWrongContext
+	}
+	receipt, err := a.client.GetReceipt(ctx, command.TaskID)
+	if err != nil {
+		return receivingdomain.Task{}, err
+	}
+	var selected *ports.ReceiptLine
+	for i := range receipt.Lines {
+		if receipt.Lines[i].LineID == command.LineID {
+			selected = &receipt.Lines[i]
 			break
 		}
 	}
 	if selected == nil {
+		slog.Warn("pda receiving owner line not found", "task_id", command.TaskID, "line_id", command.LineID)
+		return receivingdomain.Task{}, receivingdomain.ErrBarcodeWrongContext
+	}
+	if normalizeBarcode(taskLine.Barcode) != normalizeBarcode(command.Barcode) {
+		slog.Warn("pda receiving barcode context rejected", "task_id", command.TaskID, "line_id", command.LineID, "expected_barcode", taskLine.Barcode, "received_barcode", command.Barcode)
 		return receivingdomain.Task{}, receivingdomain.ErrBarcodeWrongContext
 	}
 	_, err = a.client.RecordReceiptQuantity(ctx, command.TaskID, command.LineID, ports.ReceiptQuantityRequest{ActualQuantity: float64(command.Quantity), UOMCode: selected.UOMCode, ExpectedVersion: selected.Version, ItemRevisionID: selected.ItemRevisionID, LotCode: selected.LotCode, IdempotencyKey: command.IdempotencyKey})
@@ -237,6 +268,10 @@ func (a *ReceivingAdapter) Confirm(ctx context.Context, command receivingapp.Con
 	// Inbound. Reload after the owner command instead of synthesizing a PDA
 	// quantity or status from the request payload.
 	return a.Detail(ctx, command.TaskID, command.Actor)
+}
+
+func normalizeBarcode(value string) string {
+	return strings.ToUpper(strings.TrimSpace(value))
 }
 
 func (a *ReceivingAdapter) ConfirmBatch(ctx context.Context, command receivingapp.BatchConfirmCommand) (receivingdomain.Task, error) {
