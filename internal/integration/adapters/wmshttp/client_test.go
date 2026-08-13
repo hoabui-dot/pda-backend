@@ -173,7 +173,7 @@ func TestExecutionOperatorRolePropagatesForScanAndConfirm(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := client.RecordExecutionScan(context.Background(), "task-1", "SOURCE", "BIN-01", 1, "trace-1"); err != nil {
+	if err := client.RecordExecutionScan(context.Background(), "task-1", "SOURCE", "BIN-01", 1, "operator-1", "trace-1"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := client.ApplyExecutionTaskCommand(context.Background(), "task-1", executionTaskCommand{CommandID: "command-1", CommandType: "CONFIRM", ExpectedVersion: 1}, "operator-1", "idempotency-1"); err != nil {

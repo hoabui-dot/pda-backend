@@ -19,12 +19,24 @@ func newMovementAdapter(client *Client, workflow string) *movementAdapter {
 }
 
 func (a *movementAdapter) list(ctx context.Context, actor platform.ActorContext) ([]movementdomain.Task, error) {
-	rows, err := a.client.ListExecutionTasks(ctx, actor.WarehouseID, actor.OperatorID, a.workflow, "", "", 100)
+	// Unassigned work is claimable work. Filtering by operator at the WMS
+	// query boundary hides CREATED tasks before the operator can claim them.
+	// Fetch the warehouse-scoped queue, then keep only unassigned tasks or
+	// tasks already owned by this operator.
+	rows, err := a.client.ListExecutionTasks(ctx, actor.WarehouseID, "", a.workflow, "", "", 100)
 	if err != nil {
 		return nil, err
 	}
 	out := make([]movementdomain.Task, 0, len(rows))
 	for _, row := range rows {
+		if row.AssignedOperatorID != nil && *row.AssignedOperatorID != actor.OperatorID {
+			continue
+		}
+		switch row.Status {
+		case "CREATED", "CLAIMED", "IN_PROGRESS", "PARTIALLY_COMPLETED":
+		default:
+			continue
+		}
 		out = append(out, mapMovementTask(row, a.workflow))
 	}
 	return out, nil
@@ -34,13 +46,17 @@ func (a *movementAdapter) detail(ctx context.Context, id string, actor platform.
 	if err != nil {
 		return movementdomain.Task{}, err
 	}
-	if row.WarehouseID != actor.WarehouseID || row.AssignedOperatorID != nil && *row.AssignedOperatorID != actor.OperatorID {
+	warehouseID, err := a.client.CanonicalWarehouseID(ctx, actor.WarehouseID)
+	if err != nil {
+		return movementdomain.Task{}, err
+	}
+	if warehouseID != "" && row.WarehouseID != warehouseID || row.AssignedOperatorID != nil && *row.AssignedOperatorID != actor.OperatorID {
 		return movementdomain.Task{}, &platform.DomainError{Code: "WAREHOUSE_ACCESS_DENIED", SafeMessage: "Movement task access denied"}
 	}
 	return mapMovementTask(row, a.workflow), nil
 }
 func (a *movementAdapter) scan(ctx context.Context, c movementapp.Command, typ, value string) (movementdomain.Task, error) {
-	if err := a.client.RecordExecutionScan(ctx, c.TaskID, typ, value, c.BaseVersion, c.Actor.CorrelationID); err != nil {
+	if err := a.client.RecordExecutionScan(ctx, c.TaskID, typ, value, c.BaseVersion, c.Actor.OperatorID, c.Actor.CorrelationID); err != nil {
 		return movementdomain.Task{}, err
 	}
 	return a.detail(ctx, c.TaskID, c.Actor)
@@ -56,6 +72,8 @@ func mapMovementTask(row executionTask, workflow string) movementdomain.Task {
 	status := movementdomain.Status(row.Status)
 	if status == "CREATED" {
 		status = movementdomain.New
+	} else if status == "CLAIMED" {
+		status = movementdomain.Assigned
 	}
 	lot := stringValue(row.Details, "lot_code", "lot_id")
 	requirements := []string{"SOURCE", "ITEM", "DESTINATION"}
@@ -113,9 +131,22 @@ func (a *PutawayAdapter) Claim(c context.Context, x movementapp.Command) (moveme
 	return mapMovementTask(row, a.workflow), nil
 }
 func (a *PutawayAdapter) Start(c context.Context, x movementapp.Command) (movementdomain.Task, error) {
-	claimed, err := a.Claim(c, x)
+	current, err := a.detail(context.Background(), x.TaskID, x.Actor)
 	if err != nil {
 		return movementdomain.Task{}, err
+	}
+	claimed := current
+	switch current.Status {
+	case movementdomain.New:
+		claimed, err = a.Claim(c, x)
+		if err != nil {
+			return movementdomain.Task{}, err
+		}
+	case movementdomain.Assigned, movementdomain.InProgress:
+		// The task is already owned by this operator. Re-claiming a CLAIMED
+		// task is an invalid WMS transition; proceed with START directly.
+	default:
+		return movementdomain.Task{}, &platform.DomainError{Code: "TASK_NOT_STARTABLE", SafeMessage: "Putaway task is not ready to start"}
 	}
 	if claimed.Status == movementdomain.InProgress {
 		return claimed, nil
@@ -161,7 +192,11 @@ func (a *PickingAdapter) Allocate(c context.Context, x movementapp.Command) (mov
 	if err != nil {
 		return movementdomain.Task{}, err
 	}
-	if row.WarehouseID != x.Actor.WarehouseID || row.AssignedOperatorID != nil && *row.AssignedOperatorID != x.Actor.OperatorID {
+	warehouseID, err := a.client.CanonicalWarehouseID(context.Background(), x.Actor.WarehouseID)
+	if err != nil {
+		return movementdomain.Task{}, err
+	}
+	if warehouseID != "" && row.WarehouseID != warehouseID || row.AssignedOperatorID != nil && *row.AssignedOperatorID != x.Actor.OperatorID {
 		return movementdomain.Task{}, &platform.DomainError{Code: "WAREHOUSE_ACCESS_DENIED", SafeMessage: "Picking task access denied"}
 	}
 	return mapMovementTask(row, "PICKING"), nil
