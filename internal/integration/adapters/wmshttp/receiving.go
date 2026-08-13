@@ -225,6 +225,36 @@ func (a *ReceivingAdapter) Start(ctx context.Context, command receivingapp.Comma
 }
 
 func (a *ReceivingAdapter) Confirm(ctx context.Context, command receivingapp.ConfirmCommand) (receivingdomain.Task, error) {
+	// A successful owner confirmation releases the receiving assignment. On an
+	// exact retry the receipt is therefore no longer executable by assignment,
+	// but the owner batch endpoint can still replay the same business payload
+	// idempotently. Check that state before applying the normal assigned-task
+	// mutation path.
+	ownerReceipt, ownerErr := a.client.GetReceipt(ctx, command.TaskID)
+	if ownerErr != nil {
+		return receivingdomain.Task{}, ownerErr
+	}
+	if strings.EqualFold(ownerReceipt.Status, "CONFIRMED") || strings.EqualFold(ownerReceipt.ConfirmationStatus, "CONFIRMED") {
+		var selected *ports.ReceiptLine
+		for i := range ownerReceipt.Lines {
+			if ownerReceipt.Lines[i].LineID == command.LineID {
+				selected = &ownerReceipt.Lines[i]
+				break
+			}
+		}
+		if selected == nil || normalizeBarcode(selected.LotCode) != normalizeBarcode(command.Barcode) {
+			return receivingdomain.Task{}, receivingdomain.ErrBarcodeWrongContext
+		}
+		if _, err := a.client.ReceiveReceipt(ctx, command.TaskID, ports.ReceiptBatchRequest{
+			CommandID:              command.CommandID.String(),
+			ExpectedReceiptVersion: ownerReceipt.AssignmentVersion,
+			Lines:                  []ports.ReceiptBatchLine{{LineID: selected.LineID, ActualQuantity: float64(command.Quantity), UOMCode: selected.UOMCode, ItemRevisionID: selected.ItemRevisionID, LotCode: selected.LotCode}},
+			IdempotencyKey:         command.IdempotencyKey,
+		}); err != nil {
+			return receivingdomain.Task{}, err
+		}
+		return a.Detail(ctx, command.TaskID, command.Actor)
+	}
 	task, err := a.Detail(ctx, command.TaskID, command.Actor)
 	if err != nil {
 		return task, err
