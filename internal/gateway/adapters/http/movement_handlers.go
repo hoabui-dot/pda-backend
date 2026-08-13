@@ -49,7 +49,7 @@ func movementValue(q *http.Request) (string, error) {
 	if err := validateMovementMirrors(q, x.TaskID, x.CommandID, x.IdempotencyKey, x.BaseVersion); err != nil {
 		return "", err
 	}
-	if x.ScanContext != "" && x.ScanContext != "PUTAWAY_SOURCE" && x.ScanContext != "PUTAWAY_ITEM" && x.ScanContext != "PUTAWAY_LOT" && x.ScanContext != "PUTAWAY_DESTINATION" && x.ScanContext != "PICKING_LOCATION" && x.ScanContext != "PICKING_ITEM" && x.ScanContext != "REPLENISHMENT_SOURCE" && x.ScanContext != "REPLENISHMENT_ITEM" && x.ScanContext != "REPLENISHMENT_DESTINATION" {
+	if x.ScanContext != "" && x.ScanContext != "PUTAWAY_SOURCE" && x.ScanContext != "PUTAWAY_ITEM" && x.ScanContext != "PUTAWAY_LOT" && x.ScanContext != "PUTAWAY_DESTINATION" && x.ScanContext != "PICKING_LOCATION" && x.ScanContext != "PICKING_ITEM" && x.ScanContext != "PICKING_LOT" && x.ScanContext != "PICKING_DESTINATION" && x.ScanContext != "REPLENISHMENT_SOURCE" && x.ScanContext != "REPLENISHMENT_ITEM" && x.ScanContext != "REPLENISHMENT_DESTINATION" {
 		return "", &platform.DomainError{Code: "BARCODE_WRONG_CONTEXT", SafeMessage: "Scanner context is invalid"}
 	}
 	if x.NormalizedValue != "" {
