@@ -62,7 +62,7 @@ func (a *ReceivingAdapter) List(ctx context.Context, f receivingports.Filter, ac
 		if err != nil {
 			return receivingports.Page{}, err
 		}
-		if !warehouseMatches(location, a.client.CanonicalWarehouse(actor.WarehouseID)) {
+		if !a.client.WarehouseMatches(location, actor.WarehouseID) {
 			continue
 		}
 		// Current Inbound list responses include the complete line snapshot. Use
@@ -103,7 +103,7 @@ func (a *ReceivingAdapter) Detail(ctx context.Context, id string, actor platform
 	if err != nil {
 		return receivingdomain.Task{}, err
 	}
-	if !warehouseMatches(location, a.client.CanonicalWarehouse(actor.WarehouseID)) {
+	if !a.client.WarehouseMatches(location, actor.WarehouseID) {
 		return receivingdomain.Task{}, &platform.DomainError{Code: "WAREHOUSE_ACCESS_DENIED", SafeMessage: "Receiving task belongs to another warehouse"}
 	}
 	return mapReceiptTask(receipt, actor.WarehouseID), nil

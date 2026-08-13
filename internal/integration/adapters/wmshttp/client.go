@@ -92,6 +92,9 @@ func (c *Client) CanonicalWarehouse(value string) string {
 // PDA Backend.
 func (c *Client) CanonicalWarehouseID(ctx context.Context, value string) (string, error) {
 	value = c.CanonicalWarehouse(value)
+	if value == "*" {
+		return "", nil
+	}
 	if _, err := uuid.Parse(value); err == nil {
 		return value, nil
 	}
@@ -105,6 +108,18 @@ func (c *Client) CanonicalWarehouseID(ctx context.Context, value string) (string
 		}
 	}
 	return "", fmt.Errorf("WMS warehouse %q was not found", value)
+}
+
+// WarehouseMatches resolves the PDA session context at the WMS boundary.
+// MAIN=* is a configured demo context for operators assigned to every WMS
+// warehouse; it must not be confused with a physical warehouse ID.
+func (c *Client) WarehouseMatches(location ports.Location, value string) bool {
+	if strings.EqualFold(strings.TrimSpace(c.CanonicalWarehouse(value)), "*") {
+		return true
+	}
+	canonical := c.CanonicalWarehouse(value)
+	return strings.EqualFold(strings.TrimSpace(location.WarehouseID), strings.TrimSpace(canonical)) ||
+		strings.EqualFold(strings.TrimSpace(location.WarehouseCode), strings.TrimSpace(canonical))
 }
 
 func parseWarehouseAliases(raw string) map[string]string {

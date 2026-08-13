@@ -63,6 +63,20 @@ func TestWarehouseAliasesAreExplicitAndCaseInsensitive(t *testing.T) {
 	}
 }
 
+func TestWarehouseMatchesAllConfiguredDemoContext(t *testing.T) {
+	t.Setenv("PDA_UPSTREAM_WMS_WAREHOUSE_ALIASES", "MAIN=*")
+	client, err := New("http://wms.test", "test-token", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !client.WarehouseMatches(ports.Location{WarehouseID: "fg-warehouse", WarehouseCode: "WH-KZ3-FG"}, "MAIN") {
+		t.Fatal("MAIN demo context should include an authorized warehouse location")
+	}
+	if got, err := client.CanonicalWarehouseID(context.Background(), "MAIN"); err != nil || got != "" {
+		t.Fatalf("MAIN wildcard should not be sent as a physical warehouse filter: got=%q err=%v", got, err)
+	}
+}
+
 func TestListInventoryBalancesAcceptsOwnerArrayResponse(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet || r.URL.Path != inventoryPath+"/balances" {

@@ -59,7 +59,9 @@ services:
       # explicit mapping rather than relying on inference.
       # PDA sends the operator-facing MAIN code; WMS owner APIs require the
       # canonical warehouse UUID for execution and cycle-count queries.
-      PDA_UPSTREAM_WMS_WAREHOUSE_ALIASES: ${PDA_UPSTREAM_WMS_WAREHOUSE_ALIASES:-MAIN=b29799e0-9c2e-49e6-91cc-6e8b620e6a1e}
+      # MAIN is the PDA demo context, not a physical warehouse. The operator
+      # assignment and WMS owner authorization remain authoritative.
+      PDA_UPSTREAM_WMS_WAREHOUSE_ALIASES: ${PDA_UPSTREAM_WMS_WAREHOUSE_ALIASES:-MAIN=*}
     depends_on:
       postgres:
         condition: service_healthy
