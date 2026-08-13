@@ -82,6 +82,22 @@ func (s *ReplenishmentService) List(c context.Context, a platform.ActorContext) 
 func (s *PutawayService) Detail(c context.Context, id string, a platform.ActorContext) (domain.Task, error) {
 	return detail(c, s.d, domain.Putaway, id, a)
 }
+func (s *PutawayService) Claim(c context.Context, x Command) (domain.Task, error) {
+	return mutate(c, s.d, domain.Putaway, x, "PutawayTaskClaimed", func(t *domain.Task) error { return t.Claim(x.Actor.OperatorID, x.BaseVersion, s.d.now()) }, 0)
+}
+func (s *PutawayService) Start(c context.Context, x Command) (domain.Task, error) {
+	claimed, err := s.Claim(c, x)
+	if err != nil {
+		return domain.Task{}, err
+	}
+	if claimed.Status == domain.InProgress {
+		return claimed, nil
+	}
+	x.BaseVersion = claimed.Version
+	x.CommandID = uuid.New()
+	x.IdempotencyKey = x.CommandID.String() + ":start"
+	return mutate(c, s.d, domain.Putaway, x, "PutawayTaskStarted", func(t *domain.Task) error { return t.Start(x.Actor.OperatorID, x.BaseVersion, s.d.now()) }, 0)
+}
 func (s *PickingService) Detail(c context.Context, id string, a platform.ActorContext) (domain.Task, error) {
 	return detail(c, s.d, domain.Picking, id, a)
 }

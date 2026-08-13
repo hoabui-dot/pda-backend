@@ -14,6 +14,7 @@ const (
 	Picking            Workflow = "PICKING"
 	Replenishment      Workflow = "REPLENISHMENT"
 	New                Status   = "NEW"
+	Assigned           Status   = "ASSIGNED"
 	InProgress         Status   = "IN_PROGRESS"
 	PartiallyCompleted Status   = "PARTIALLY_COMPLETED"
 	Completed          Status   = "COMPLETED"
@@ -70,23 +71,60 @@ func (t *Task) guard(operator string, base int64) error {
 	if t.Version != base {
 		return ErrVersion
 	}
+	if t.OperatorID == nil || *t.OperatorID != operator {
+		return ErrNotAssigned
+	}
+	if t.Status != InProgress && t.Status != PartiallyCompleted {
+		return &platform.DomainError{Code: "TASK_NOT_IN_PROGRESS", SafeMessage: "Task must be started before execution"}
+	}
+	return nil
+}
+func (t *Task) Claim(operator string, base int64, now time.Time) error {
+	if t.Version != base {
+		return ErrVersion
+	}
 	if t.OperatorID != nil && *t.OperatorID != operator {
 		return ErrNotAssigned
 	}
-	if t.OperatorID == nil {
-		t.OperatorID = &operator
+	if t.OperatorID != nil && t.Status == Assigned {
+		return nil
 	}
+	t.OperatorID = &operator
+	t.Status = Assigned
+	t.Version++
+	t.UpdatedAt = now.UTC()
+	return nil
+}
+func (t *Task) Start(operator string, base int64, now time.Time) error {
+	if t.Version != base {
+		return ErrVersion
+	}
+	if t.OperatorID == nil || *t.OperatorID != operator {
+		return ErrNotAssigned
+	}
+	if t.Status == InProgress {
+		return nil
+	}
+	if t.Status != Assigned {
+		return &platform.DomainError{Code: "TASK_NOT_STARTABLE", SafeMessage: "Task must be claimed before it starts"}
+	}
+	t.Status = InProgress
+	t.Version++
+	t.UpdatedAt = now.UTC()
 	return nil
 }
 func (t *Task) ValidateSource(operator, value string, base int64, now time.Time) error {
 	if err := t.guard(operator, base); err != nil {
 		return err
 	}
-	if !matchesAny(value, t.SourceBin, t.SourceBinCode, t.SourceBinID, t.SourceLocation, t.SourceLocationCode, t.SourceLocationID) {
+	if t.SourceBinID != "" || t.SourceBinCode != "" {
+		if !matchesAny(value, t.SourceBinCode, t.SourceBinID) {
+			return ErrSource
+		}
+	} else if !matchesAny(value, t.SourceLocation, t.SourceLocationCode, t.SourceLocationID) {
 		return ErrSource
 	}
 	t.SourceValidated = true
-	t.Status = InProgress
 	t.Version++
 	t.UpdatedAt = now.UTC()
 	return nil
@@ -98,11 +136,14 @@ func (t *Task) ValidateDestination(operator, value string, base int64, now time.
 	if !t.SourceValidated {
 		return ErrSequence
 	}
-	if !matchesAny(value, t.DestinationBinID, t.DestinationBinCode, t.DestinationLocation, t.DestinationLocationCode, t.DestinationLocationID) {
+	if t.DestinationBinID != "" || t.DestinationBinCode != "" {
+		if !matchesAny(value, t.DestinationBinCode, t.DestinationBinID) {
+			return ErrDestination
+		}
+	} else if !matchesAny(value, t.DestinationLocation, t.DestinationLocationCode, t.DestinationLocationID) {
 		return ErrDestination
 	}
 	t.DestinationValidated = true
-	t.Status = InProgress
 	t.Version++
 	t.UpdatedAt = now.UTC()
 	return nil
@@ -127,7 +168,6 @@ func (t *Task) ValidateItem(operator, barcode string, base int64, now time.Time)
 		return ErrItem
 	}
 	t.ItemValidated = true
-	t.Status = InProgress
 	t.Version++
 	t.UpdatedAt = now.UTC()
 	return nil

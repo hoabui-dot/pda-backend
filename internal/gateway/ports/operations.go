@@ -38,6 +38,8 @@ type TaskOperations interface {
 type PutawayOperations interface {
 	List(context.Context, platform.ActorContext) ([]movementdomain.Task, error)
 	Detail(context.Context, string, platform.ActorContext) (movementdomain.Task, error)
+	Claim(context.Context, movementapp.Command) (movementdomain.Task, error)
+	Start(context.Context, movementapp.Command) (movementdomain.Task, error)
 	Suggestions(context.Context, string, platform.ActorContext) ([]movementdomain.Location, error)
 	ValidateSource(context.Context, movementapp.Command, string) (movementdomain.Task, error)
 	ValidateItem(context.Context, movementapp.Command, string) (movementdomain.Task, error)

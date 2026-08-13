@@ -196,6 +196,24 @@ func (r *Router) putawayDetail(w http.ResponseWriter, q *http.Request) {
 	v, e := r.putaway.Detail(q.Context(), chi.URLParam(q, "taskId"), r.actor(q))
 	r.movementResponse(w, q, v, e)
 }
+func (r *Router) putawayClaim(w http.ResponseWriter, q *http.Request) {
+	c, e := r.movementCommand(q)
+	if e != nil {
+		r.movementResponse(w, q, nil, e)
+		return
+	}
+	v, e := r.putaway.Claim(q.Context(), c)
+	r.movementResponse(w, q, v, e)
+}
+func (r *Router) putawayStart(w http.ResponseWriter, q *http.Request) {
+	c, e := r.movementCommand(q)
+	if e != nil {
+		r.movementResponse(w, q, nil, e)
+		return
+	}
+	v, e := r.putaway.Start(q.Context(), c)
+	r.movementResponse(w, q, v, e)
+}
 func (r *Router) putawaySuggestions(w http.ResponseWriter, q *http.Request) {
 	v, e := r.putaway.Suggestions(q.Context(), chi.URLParam(q, "taskId"), r.actor(q))
 	r.movementResponse(w, q, v, e)

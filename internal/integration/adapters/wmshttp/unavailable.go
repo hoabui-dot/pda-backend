@@ -58,6 +58,9 @@ func (u Unavailable) MovementList(context.Context, platform.ActorContext) ([]mov
 func (u Unavailable) MovementDetail(context.Context, string, platform.ActorContext) (movementdomain.Task, error) {
 	return movementdomain.Task{}, u.err()
 }
+func (u Unavailable) MovementTaskCommand(context.Context, movementapp.Command) (movementdomain.Task, error) {
+	return movementdomain.Task{}, u.err()
+}
 func (u Unavailable) PickingAllocate(context.Context, movementapp.Command) (movementdomain.Task, error) {
 	return movementdomain.Task{}, u.err()
 }
@@ -187,6 +190,12 @@ func (u putawayAdapter) List(c context.Context, a platform.ActorContext) ([]move
 }
 func (u putawayAdapter) Detail(c context.Context, id string, a platform.ActorContext) (movementdomain.Task, error) {
 	return Unavailable(u).MovementDetail(c, id, a)
+}
+func (u putawayAdapter) Claim(c context.Context, x movementapp.Command) (movementdomain.Task, error) {
+	return Unavailable(u).MovementTaskCommand(c, x)
+}
+func (u putawayAdapter) Start(c context.Context, x movementapp.Command) (movementdomain.Task, error) {
+	return Unavailable(u).MovementTaskCommand(c, x)
 }
 func (u putawayAdapter) Suggestions(c context.Context, id string, a platform.ActorContext) ([]movementdomain.Location, error) {
 	return Unavailable(u).Suggestions(c, id, a)

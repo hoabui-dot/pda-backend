@@ -2,6 +2,7 @@ package wmshttp
 
 import (
 	"context"
+	"github.com/google/uuid"
 
 	movementapp "github.com/company/pda-backend/internal/execution/movement/application"
 	movementdomain "github.com/company/pda-backend/internal/execution/movement/domain"
@@ -53,9 +54,6 @@ func (a *movementAdapter) confirm(ctx context.Context, c movementapp.Command, qu
 }
 func mapMovementTask(row executionTask, workflow string) movementdomain.Task {
 	status := movementdomain.Status(row.Status)
-	if status == "CLAIMED" {
-		status = movementdomain.InProgress
-	}
 	if status == "CREATED" {
 		status = movementdomain.New
 	}
@@ -106,6 +104,27 @@ func (a *PutawayAdapter) List(c context.Context, x platform.ActorContext) ([]mov
 }
 func (a *PutawayAdapter) Detail(c context.Context, id string, x platform.ActorContext) (movementdomain.Task, error) {
 	return a.detail(c, id, x)
+}
+func (a *PutawayAdapter) Claim(c context.Context, x movementapp.Command) (movementdomain.Task, error) {
+	row, err := a.client.ApplyExecutionTaskCommand(c, x.TaskID, executionTaskCommand{CommandID: x.CommandID.String(), CommandType: "CLAIM", ExpectedVersion: x.BaseVersion, CorrelationID: x.Actor.CorrelationID}, x.Actor.OperatorID, x.IdempotencyKey)
+	if err != nil {
+		return movementdomain.Task{}, err
+	}
+	return mapMovementTask(row, a.workflow), nil
+}
+func (a *PutawayAdapter) Start(c context.Context, x movementapp.Command) (movementdomain.Task, error) {
+	claimed, err := a.Claim(c, x)
+	if err != nil {
+		return movementdomain.Task{}, err
+	}
+	if claimed.Status == movementdomain.InProgress {
+		return claimed, nil
+	}
+	row, err := a.client.ApplyExecutionTaskCommand(c, x.TaskID, executionTaskCommand{CommandID: uuid.NewString(), CommandType: "START", ExpectedVersion: claimed.Version, CorrelationID: x.Actor.CorrelationID}, x.Actor.OperatorID, x.IdempotencyKey+":start")
+	if err != nil {
+		return movementdomain.Task{}, err
+	}
+	return mapMovementTask(row, a.workflow), nil
 }
 func (a *PutawayAdapter) Suggestions(context.Context, string, platform.ActorContext) ([]movementdomain.Location, error) {
 	return nil, &platform.DomainError{Code: "UPSTREAM_OPERATION_NOT_IMPLEMENTED", SafeMessage: "WMS putaway destination suggestion is not mapped"}

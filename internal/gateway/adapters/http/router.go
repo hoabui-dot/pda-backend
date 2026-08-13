@@ -116,6 +116,8 @@ func New(identityService *identityapp.Service, taskService gatewayports.TaskOper
 			protected.With(router.deviceWarehouseContext).Get("/putaway/tasks/{taskId}", router.putawayDetail)
 			protected.With(router.deviceWarehouseContext).Get("/putaway", router.putawayList)
 			protected.With(router.deviceWarehouseContext).Get("/putaway/{taskId}", router.putawayDetail)
+			protected.With(router.deviceWarehouseContext).Post("/putaway/tasks/{taskId}/claim", router.putawayClaim)
+			protected.With(router.deviceWarehouseContext).Post("/putaway/tasks/{taskId}/start", router.putawayStart)
 			protected.With(router.deviceWarehouseContext).Post("/putaway/tasks/{taskId}/source-validations", router.putawaySource)
 			protected.With(router.deviceWarehouseContext).Post("/putaway/{taskId}/validate-source", router.putawaySource)
 			protected.With(router.deviceWarehouseContext).Post("/putaway/tasks/{taskId}/item-validations", router.putawayItem)
