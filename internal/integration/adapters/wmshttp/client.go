@@ -441,6 +441,9 @@ func (c *Client) ApplyExecutionTaskCommand(ctx context.Context, id string, comma
 		return executionTask{}, fmt.Errorf("build WMS task command request: %w", err)
 	}
 	c.applyHeaders(req, idempotencyKey)
+	// PDA Backend acts as the authenticated service, while the operator role
+	// remains explicit for Warehouse Execution authorization.
+	req.Header.Set("X-Role-Code", "WMS_EXECUTION_OPERATOR")
 	if actorID != "" {
 		req.Header.Set("X-User-ID", actorID)
 	}
@@ -504,6 +507,8 @@ func (c *Client) RecordExecutionScan(ctx context.Context, id, scanType, value st
 		return fmt.Errorf("build WMS task scan request: %w", err)
 	}
 	c.applyHeaders(req, "")
+	// Scan validation is an operator action forwarded by PDA Backend.
+	req.Header.Set("X-Role-Code", "WMS_EXECUTION_OPERATOR")
 	if traceID != "" {
 		req.Header.Set("X-Trace-ID", traceID)
 	}

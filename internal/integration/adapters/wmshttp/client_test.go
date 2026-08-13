@@ -138,6 +138,35 @@ func TestReceivingAndLocationAdaptersMapOwnerContracts(t *testing.T) {
 	}
 }
 
+func TestExecutionOperatorRolePropagatesForScanAndConfirm(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("X-Role-Code") != "WMS_EXECUTION_OPERATOR" {
+			t.Fatalf("missing execution operator role: %q", r.Header.Get("X-Role-Code"))
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if strings.HasSuffix(r.URL.Path, "/scans") {
+			_, _ = w.Write([]byte(`{"ok":true}`))
+			return
+		}
+		if strings.HasSuffix(r.URL.Path, "/confirm") {
+			_, _ = w.Write([]byte(`{"task":{"task_id":"task-1","task_type":"PUTAWAY","status":"COMPLETED","warehouse_id":"wh-1","version":2}}`))
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer server.Close()
+	client, err := New(server.URL, "test-token", server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := client.RecordExecutionScan(context.Background(), "task-1", "SOURCE", "BIN-01", 1, "trace-1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.ApplyExecutionTaskCommand(context.Background(), "task-1", executionTaskCommand{CommandID: "command-1", CommandType: "CONFIRM", ExpectedVersion: 1}, "operator-1", "idempotency-1"); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestReceivingListReturnsOwnerLineSnapshot(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")

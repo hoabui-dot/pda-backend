@@ -2,6 +2,7 @@ package domain
 
 import (
 	platform "github.com/company/pda-backend/internal/platform/domain"
+	"strings"
 	"time"
 )
 
@@ -33,27 +34,35 @@ var (
 )
 
 type Task struct {
-	ID                   string    `json:"id"`
-	Workflow             Workflow  `json:"workflow"`
-	Status               Status    `json:"status"`
-	WarehouseID          string    `json:"warehouseId"`
-	OperatorID           *string   `json:"operatorId"`
-	Version              int64     `json:"version"`
-	SourceLocation       string    `json:"sourceLocation"`
-	SourceBin            string    `json:"sourceBin,omitempty"`
-	DestinationLocation  string    `json:"destinationLocation"`
-	DestinationCode      string    `json:"destinationCode,omitempty"`
-	ItemID               string    `json:"itemId"`
-	Barcode              string    `json:"barcode"`
-	Lot                  string    `json:"lot,omitempty"`
-	RequiredQuantity     int64     `json:"requiredQuantity"`
-	CompletedQuantity    int64     `json:"completedQuantity"`
-	SourceValidated      bool      `json:"sourceValidated"`
-	DestinationValidated bool      `json:"destinationValidated"`
-	ItemValidated        bool      `json:"itemValidated"`
-	LotValidated         bool      `json:"lotValidated"`
-	ScanRequirements     []string  `json:"scanRequirements,omitempty"`
-	UpdatedAt            time.Time `json:"updatedAt"`
+	ID                      string    `json:"id"`
+	Workflow                Workflow  `json:"workflow"`
+	Status                  Status    `json:"status"`
+	WarehouseID             string    `json:"warehouseId"`
+	OperatorID              *string   `json:"operatorId"`
+	Version                 int64     `json:"version"`
+	SourceLocation          string    `json:"sourceLocation"`
+	SourceLocationID        string    `json:"sourceLocationId,omitempty"`
+	SourceLocationCode      string    `json:"sourceLocationCode,omitempty"`
+	SourceBin               string    `json:"sourceBin,omitempty"`
+	SourceBinID             string    `json:"sourceBinId,omitempty"`
+	SourceBinCode           string    `json:"sourceBinCode,omitempty"`
+	DestinationLocation     string    `json:"destinationLocation"`
+	DestinationLocationID   string    `json:"destinationLocationId,omitempty"`
+	DestinationLocationCode string    `json:"destinationLocationCode,omitempty"`
+	DestinationCode         string    `json:"destinationCode,omitempty"`
+	DestinationBinID        string    `json:"destinationBinId,omitempty"`
+	DestinationBinCode      string    `json:"destinationBinCode,omitempty"`
+	ItemID                  string    `json:"itemId"`
+	Barcode                 string    `json:"barcode"`
+	Lot                     string    `json:"lot,omitempty"`
+	RequiredQuantity        int64     `json:"requiredQuantity"`
+	CompletedQuantity       int64     `json:"completedQuantity"`
+	SourceValidated         bool      `json:"sourceValidated"`
+	DestinationValidated    bool      `json:"destinationValidated"`
+	ItemValidated           bool      `json:"itemValidated"`
+	LotValidated            bool      `json:"lotValidated"`
+	ScanRequirements        []string  `json:"scanRequirements,omitempty"`
+	UpdatedAt               time.Time `json:"updatedAt"`
 }
 
 func (t Task) Remaining() int64 { return t.RequiredQuantity - t.CompletedQuantity }
@@ -73,11 +82,7 @@ func (t *Task) ValidateSource(operator, value string, base int64, now time.Time)
 	if err := t.guard(operator, base); err != nil {
 		return err
 	}
-	expected := t.SourceLocation
-	if t.SourceBin != "" {
-		expected = t.SourceBin
-	}
-	if value != expected {
+	if !matchesAny(value, t.SourceBin, t.SourceBinCode, t.SourceBinID, t.SourceLocation, t.SourceLocationCode, t.SourceLocationID) {
 		return ErrSource
 	}
 	t.SourceValidated = true
@@ -93,7 +98,7 @@ func (t *Task) ValidateDestination(operator, value string, base int64, now time.
 	if !t.SourceValidated {
 		return ErrSequence
 	}
-	if value != t.DestinationLocation {
+	if !matchesAny(value, t.DestinationBinID, t.DestinationBinCode, t.DestinationLocation, t.DestinationLocationCode, t.DestinationLocationID) {
 		return ErrDestination
 	}
 	t.DestinationValidated = true
@@ -101,6 +106,15 @@ func (t *Task) ValidateDestination(operator, value string, base int64, now time.
 	t.Version++
 	t.UpdatedAt = now.UTC()
 	return nil
+}
+
+func matchesAny(value string, candidates ...string) bool {
+	for _, candidate := range candidates {
+		if candidate != "" && strings.EqualFold(strings.TrimSpace(value), strings.TrimSpace(candidate)) {
+			return true
+		}
+	}
+	return false
 }
 func (t *Task) ValidateItem(operator, barcode string, base int64, now time.Time) error {
 	if err := t.guard(operator, base); err != nil {

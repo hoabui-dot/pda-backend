@@ -64,7 +64,20 @@ func mapMovementTask(row executionTask, workflow string) movementdomain.Task {
 	if lot != "" {
 		requirements = []string{"SOURCE", "ITEM", "LOT", "DESTINATION"}
 	}
-	return movementdomain.Task{ID: row.TaskID, Workflow: movementdomain.Workflow(workflow), Status: status, WarehouseID: row.WarehouseID, OperatorID: row.AssignedOperatorID, Version: row.Version, UpdatedAt: row.UpdatedAt, RequiredQuantity: int64(number(row.Details, "qty", "quantity", "required_quantity")), CompletedQuantity: int64(number(row.Details, "completed_qty", "picked_qty")), SourceLocation: stringValue(row.Details, "source_location_id", "source_location"), SourceBin: stringValue(row.Details, "source_bin_code", "source_bin_id"), DestinationLocation: stringValue(row.Details, "destination_location_id", "destination_location"), DestinationCode: stringValue(row.Details, "destination_location_code", "destination_location_code"), ItemID: stringValue(row.Details, "item_revision_id", "item_id"), Barcode: stringValue(row.Details, "barcode", "item_code"), Lot: lot, ScanRequirements: requirements}
+	return movementdomain.Task{
+		ID: row.TaskID, Workflow: movementdomain.Workflow(workflow), Status: status, WarehouseID: row.WarehouseID,
+		OperatorID: row.AssignedOperatorID, Version: row.Version, UpdatedAt: row.UpdatedAt,
+		RequiredQuantity:  int64(number(row.Details, "qty", "quantity", "required_quantity")),
+		CompletedQuantity: int64(number(row.Details, "completed_qty", "picked_qty")),
+		SourceLocation:    stringValue(row.Details, "source_location_id", "source_location"),
+		SourceLocationID:  stringValue(row.Details, "source_location_id"), SourceLocationCode: stringValue(row.Details, "source_location_code"),
+		SourceBin: stringValue(row.Details, "source_bin_code", "source_bin_id"), SourceBinID: stringValue(row.Details, "source_bin_id"), SourceBinCode: stringValue(row.Details, "source_bin_code"),
+		DestinationLocation:   stringValue(row.Details, "destination_location_id", "destination_location"),
+		DestinationLocationID: stringValue(row.Details, "destination_location_id"), DestinationLocationCode: stringValue(row.Details, "destination_location_code"),
+		DestinationCode:  stringValue(row.Details, "destination_location_code", "destination_location_code"),
+		DestinationBinID: stringValue(row.Details, "destination_bin_id"), DestinationBinCode: stringValue(row.Details, "destination_bin_code"),
+		ItemID: stringValue(row.Details, "item_revision_id", "item_id"), Barcode: stringValue(row.Details, "barcode", "item_code"), Lot: lot, ScanRequirements: requirements,
+	}
 }
 func number(m map[string]any, keys ...string) float64 {
 	for _, k := range keys {
