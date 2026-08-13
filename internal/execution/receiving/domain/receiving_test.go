@@ -29,8 +29,11 @@ func TestQuantityPoliciesAndVersion(t *testing.T) {
 }
 func TestStateTransitions(t *testing.T) {
 	task := Task{ID: "REC", Status: StatusNew, Version: 1, Lines: []Line{{ExpectedQuantity: 1}}}
-	if err := task.Start("OP-01", 1, time.Now()); err != nil || task.Status != StatusInProgress || task.Version != 2 {
-		t.Fatalf("start: %+v %v", task, err)
+	if err := task.Start("OP-01", 1, time.Now()); !errors.Is(err, ErrNotAssigned) {
+		t.Fatalf("unassigned start must be rejected: %+v %v", task, err)
+	}
+	if err := task.Claim("OP-01", 1, time.Now()); err != nil || task.Status != StatusInProgress || task.Version != 2 {
+		t.Fatalf("claim: %+v %v", task, err)
 	}
 	if err := task.Complete("OP-01", 2, time.Now()); !errors.Is(err, ErrIncomplete) {
 		t.Fatalf("expected incomplete: %v", err)

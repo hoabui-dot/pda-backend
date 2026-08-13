@@ -215,10 +215,12 @@ func (a *ReceivingAdapter) Start(ctx context.Context, command receivingapp.Comma
 	if err != nil {
 		return task, err
 	}
-	operator := command.Actor.OperatorID
-	task.OperatorID = &operator
-	task.Status = receivingdomain.StatusInProgress
-	task.Version++
+	if task.OperatorID == nil || *task.OperatorID != command.Actor.OperatorID {
+		return receivingdomain.Task{}, receivingdomain.ErrNotAssigned
+	}
+	if err := task.Start(command.Actor.OperatorID, command.BaseVersion, time.Now().UTC()); err != nil {
+		return receivingdomain.Task{}, err
+	}
 	return task, nil
 }
 
@@ -226,6 +228,9 @@ func (a *ReceivingAdapter) Confirm(ctx context.Context, command receivingapp.Con
 	task, err := a.Detail(ctx, command.TaskID, command.Actor)
 	if err != nil {
 		return task, err
+	}
+	if task.OperatorID == nil || *task.OperatorID != command.Actor.OperatorID || (task.Status != receivingdomain.StatusInProgress && task.Status != receivingdomain.StatusPartiallyCompleted) {
+		return receivingdomain.Task{}, receivingdomain.ErrNotAssigned
 	}
 	var taskLine *receivingdomain.Line
 	for i := range task.Lines {
@@ -275,6 +280,13 @@ func normalizeBarcode(value string) string {
 }
 
 func (a *ReceivingAdapter) ConfirmBatch(ctx context.Context, command receivingapp.BatchConfirmCommand) (receivingdomain.Task, error) {
+	task, err := a.Detail(ctx, command.TaskID, command.Actor)
+	if err != nil {
+		return receivingdomain.Task{}, err
+	}
+	if task.OperatorID == nil || *task.OperatorID != command.Actor.OperatorID || (task.Status != receivingdomain.StatusInProgress && task.Status != receivingdomain.StatusPartiallyCompleted) {
+		return receivingdomain.Task{}, receivingdomain.ErrNotAssigned
+	}
 	lines := make([]ports.ReceiptBatchLine, 0, len(command.Lines))
 	for _, line := range command.Lines {
 		lines = append(lines, ports.ReceiptBatchLine{LineID: line.LineID, ActualQuantity: float64(line.ActualQuantity), UOMCode: line.UOMCode, ItemRevisionID: line.ItemRevisionID, LotCode: line.LotCode})

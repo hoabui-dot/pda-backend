@@ -79,7 +79,9 @@ func (s *Service) Detail(ctx context.Context, id string, actor platform.ActorCon
 // durable task claim semantics; HTTP mode maps this call to Inbound's receipt
 // assignment claim instead of creating a local business record.
 func (s *Service) Claim(ctx context.Context, command Command) (domain.Task, error) {
-	return s.Start(ctx, command)
+	return s.mutate(ctx, command, "ReceivingTaskClaimed", "CLAIM", func(t *domain.Task) (string, int64, error) {
+		return "", 0, t.Claim(command.Actor.OperatorID, command.BaseVersion, s.now())
+	})
 }
 func (s *Service) ResolveBarcode(ctx context.Context, taskID, barcode string, actor platform.ActorContext) (domain.Line, error) {
 	task, err := s.Detail(ctx, taskID, actor)

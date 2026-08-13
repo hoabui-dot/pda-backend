@@ -72,6 +72,25 @@ func (t *Task) Start(operator string, base int64, now time.Time) error {
 	if t.Status == StatusCompleted {
 		return ErrAlreadyCompleted
 	}
+	if t.OperatorID == nil || *t.OperatorID != operator {
+		return ErrNotAssigned
+	}
+	t.Status = StatusInProgress
+	t.Version++
+	t.UpdatedAt = now.UTC()
+	return nil
+}
+
+// Claim is the only transition that may acquire an unassigned receipt.
+// Start deliberately requires an existing assignment so a direct start call
+// cannot bypass the owner claim boundary.
+func (t *Task) Claim(operator string, base int64, now time.Time) error {
+	if t.Version != base {
+		return ErrVersionConflict
+	}
+	if t.Status == StatusCompleted {
+		return ErrAlreadyCompleted
+	}
 	if t.OperatorID != nil && *t.OperatorID != operator {
 		return ErrNotAssigned
 	}
