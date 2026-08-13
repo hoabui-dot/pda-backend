@@ -187,6 +187,38 @@ func (a *PickingAdapter) List(c context.Context, x platform.ActorContext) ([]mov
 func (a *PickingAdapter) Detail(c context.Context, id string, x platform.ActorContext) (movementdomain.Task, error) {
 	return a.detail(c, id, x)
 }
+func (a *PickingAdapter) Claim(c context.Context, x movementapp.Command) (movementdomain.Task, error) {
+	row, err := a.client.ApplyExecutionTaskCommand(c, x.TaskID, executionTaskCommand{CommandID: x.CommandID.String(), CommandType: "CLAIM", ExpectedVersion: x.BaseVersion, CorrelationID: x.Actor.CorrelationID}, x.Actor.OperatorID, x.IdempotencyKey)
+	if err != nil {
+		return movementdomain.Task{}, err
+	}
+	return mapMovementTask(row, a.workflow), nil
+}
+func (a *PickingAdapter) Start(c context.Context, x movementapp.Command) (movementdomain.Task, error) {
+	current, err := a.detail(c, x.TaskID, x.Actor)
+	if err != nil {
+		return movementdomain.Task{}, err
+	}
+	claimed := current
+	switch current.Status {
+	case movementdomain.New:
+		claimed, err = a.Claim(c, x)
+	case movementdomain.Assigned, movementdomain.InProgress:
+	default:
+		return movementdomain.Task{}, &platform.DomainError{Code: "TASK_NOT_STARTABLE", SafeMessage: "Picking task is not ready to start"}
+	}
+	if err != nil {
+		return movementdomain.Task{}, err
+	}
+	if claimed.Status == movementdomain.InProgress {
+		return claimed, nil
+	}
+	row, err := a.client.ApplyExecutionTaskCommand(c, x.TaskID, executionTaskCommand{CommandID: uuid.NewString(), CommandType: "START", ExpectedVersion: claimed.Version, CorrelationID: x.Actor.CorrelationID}, x.Actor.OperatorID, x.IdempotencyKey+":start")
+	if err != nil {
+		return movementdomain.Task{}, err
+	}
+	return mapMovementTask(row, a.workflow), nil
+}
 func (a *PickingAdapter) Allocate(c context.Context, x movementapp.Command) (movementdomain.Task, error) {
 	row, err := a.client.AllocateExecutionTask(c, x.TaskID, x.CommandID.String(), x.Actor.CorrelationID, x.Actor.OperatorID, x.IdempotencyKey)
 	if err != nil {
@@ -206,6 +238,12 @@ func (a *PickingAdapter) ValidateLocation(c context.Context, x movementapp.Comma
 }
 func (a *PickingAdapter) ResolveBarcode(c context.Context, x movementapp.Command, v string) (movementdomain.Task, error) {
 	return a.scan(c, x, "ITEM", v)
+}
+func (a *PickingAdapter) ValidateLot(c context.Context, x movementapp.Command, v string) (movementdomain.Task, error) {
+	return a.scan(c, x, "LOT", v)
+}
+func (a *PickingAdapter) ValidateDestination(c context.Context, x movementapp.Command, v string) (movementdomain.Task, error) {
+	return a.scan(c, x, "DESTINATION", v)
 }
 func (a *PickingAdapter) Confirm(c context.Context, x movementapp.Command, q int64) (movementdomain.Task, error) {
 	return a.confirm(c, x, q)

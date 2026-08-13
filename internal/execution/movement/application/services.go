@@ -101,6 +101,22 @@ func (s *PutawayService) Start(c context.Context, x Command) (domain.Task, error
 func (s *PickingService) Detail(c context.Context, id string, a platform.ActorContext) (domain.Task, error) {
 	return detail(c, s.d, domain.Picking, id, a)
 }
+func (s *PickingService) Claim(c context.Context, x Command) (domain.Task, error) {
+	return mutate(c, s.d, domain.Picking, x, "PickingTaskClaimed", func(t *domain.Task) error { return t.Claim(x.Actor.OperatorID, x.BaseVersion, s.d.now()) }, 0)
+}
+func (s *PickingService) Start(c context.Context, x Command) (domain.Task, error) {
+	claimed, err := s.Claim(c, x)
+	if err != nil {
+		return domain.Task{}, err
+	}
+	if claimed.Status == domain.InProgress {
+		return claimed, nil
+	}
+	x.BaseVersion = claimed.Version
+	x.CommandID = uuid.New()
+	x.IdempotencyKey = x.CommandID.String() + ":start"
+	return mutate(c, s.d, domain.Picking, x, "PickingTaskStarted", func(t *domain.Task) error { return t.Start(x.Actor.OperatorID, x.BaseVersion, s.d.now()) }, 0)
+}
 
 // Allocate is a compatibility no-op for the local test composition. The
 // production HTTP adapter delegates allocation to WMS/Inventory authority.
@@ -140,9 +156,16 @@ func (s *PickingService) ValidateLocation(c context.Context, x Command, v string
 func (s *PickingService) ResolveBarcode(c context.Context, x Command, v string) (domain.Task, error) {
 	return mutate(c, s.d, domain.Picking, x, "PickingBarcodeResolved", func(t *domain.Task) error { return t.ValidateItem(x.Actor.OperatorID, v, x.BaseVersion, s.d.now()) }, 0)
 }
+func (s *PickingService) ValidateLot(c context.Context, x Command, v string) (domain.Task, error) {
+	return mutate(c, s.d, domain.Picking, x, "PickingLotValidated", func(t *domain.Task) error { return t.ValidateLot(x.Actor.OperatorID, v, x.BaseVersion, s.d.now()) }, 0)
+}
+func (s *PickingService) ValidateDestination(c context.Context, x Command, v string) (domain.Task, error) {
+	return mutate(c, s.d, domain.Picking, x, "PickingDestinationValidated", func(t *domain.Task) error {
+		return t.ValidateDestination(x.Actor.OperatorID, v, x.BaseVersion, s.d.now())
+	}, 0)
+}
 func (s *PickingService) Confirm(c context.Context, x Command, q int64) (domain.Task, error) {
 	return mutate(c, s.d, domain.Picking, x, "PickConfirmed", func(t *domain.Task) error {
-		t.DestinationValidated = true
 		return t.Move(x.Actor.OperatorID, q, x.BaseVersion, s.d.now())
 	}, q)
 }

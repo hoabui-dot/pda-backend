@@ -51,9 +51,13 @@ type PutawayOperations interface {
 type PickingOperations interface {
 	List(context.Context, platform.ActorContext) ([]movementdomain.Task, error)
 	Detail(context.Context, string, platform.ActorContext) (movementdomain.Task, error)
+	Claim(context.Context, movementapp.Command) (movementdomain.Task, error)
+	Start(context.Context, movementapp.Command) (movementdomain.Task, error)
 	Allocate(context.Context, movementapp.Command) (movementdomain.Task, error)
 	ValidateLocation(context.Context, movementapp.Command, string) (movementdomain.Task, error)
 	ResolveBarcode(context.Context, movementapp.Command, string) (movementdomain.Task, error)
+	ValidateLot(context.Context, movementapp.Command, string) (movementdomain.Task, error)
+	ValidateDestination(context.Context, movementapp.Command, string) (movementdomain.Task, error)
 	Confirm(context.Context, movementapp.Command, int64) (movementdomain.Task, error)
 	Complete(context.Context, movementapp.Command) (movementdomain.Task, error)
 }

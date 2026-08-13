@@ -79,6 +79,9 @@ func (u Unavailable) ValidateLocation(context.Context, movementapp.Command, stri
 func (u Unavailable) ResolveBarcode(context.Context, movementapp.Command, string) (movementdomain.Task, error) {
 	return movementdomain.Task{}, u.err()
 }
+func (u Unavailable) ValidateLot(context.Context, movementapp.Command, string) (movementdomain.Task, error) {
+	return movementdomain.Task{}, u.err()
+}
 func (u Unavailable) ValidateItem(context.Context, movementapp.Command, string) (movementdomain.Task, error) {
 	return movementdomain.Task{}, u.err()
 }
@@ -224,6 +227,12 @@ func (u pickingAdapter) List(c context.Context, a platform.ActorContext) ([]move
 func (u pickingAdapter) Detail(c context.Context, id string, a platform.ActorContext) (movementdomain.Task, error) {
 	return Unavailable(u).MovementDetail(c, id, a)
 }
+func (u pickingAdapter) Claim(c context.Context, x movementapp.Command) (movementdomain.Task, error) {
+	return Unavailable(u).MovementTaskCommand(c, x)
+}
+func (u pickingAdapter) Start(c context.Context, x movementapp.Command) (movementdomain.Task, error) {
+	return Unavailable(u).MovementTaskCommand(c, x)
+}
 func (u pickingAdapter) Allocate(c context.Context, x movementapp.Command) (movementdomain.Task, error) {
 	return Unavailable(u).PickingAllocate(c, x)
 }
@@ -232,6 +241,12 @@ func (u pickingAdapter) ValidateLocation(c context.Context, x movementapp.Comman
 }
 func (u pickingAdapter) ResolveBarcode(c context.Context, x movementapp.Command, v string) (movementdomain.Task, error) {
 	return Unavailable(u).ResolveBarcode(c, x, v)
+}
+func (u pickingAdapter) ValidateLot(c context.Context, x movementapp.Command, v string) (movementdomain.Task, error) {
+	return Unavailable(u).ValidateLot(c, x, v)
+}
+func (u pickingAdapter) ValidateDestination(c context.Context, x movementapp.Command, v string) (movementdomain.Task, error) {
+	return Unavailable(u).ValidateDestination(c, x, v)
 }
 func (u pickingAdapter) Confirm(c context.Context, x movementapp.Command, q int64) (movementdomain.Task, error) {
 	return Unavailable(u).MovementConfirm(c, x, q)

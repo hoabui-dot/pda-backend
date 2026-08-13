@@ -251,6 +251,24 @@ func (r *Router) pickingDetail(w http.ResponseWriter, q *http.Request) {
 	v, e := r.picking.Detail(q.Context(), chi.URLParam(q, "taskId"), r.actor(q))
 	r.movementResponse(w, q, v, e)
 }
+func (r *Router) pickingClaim(w http.ResponseWriter, q *http.Request) {
+	c, e := r.movementCommand(q)
+	if e != nil {
+		r.movementResponse(w, q, nil, e)
+		return
+	}
+	v, e := r.picking.Claim(q.Context(), c)
+	r.movementResponse(w, q, v, e)
+}
+func (r *Router) pickingStart(w http.ResponseWriter, q *http.Request) {
+	c, e := r.movementCommand(q)
+	if e != nil {
+		r.movementResponse(w, q, nil, e)
+		return
+	}
+	v, e := r.picking.Start(q.Context(), c)
+	r.movementResponse(w, q, v, e)
+}
 func (r *Router) pickingAllocate(w http.ResponseWriter, q *http.Request) {
 	c, e := r.movementCommand(q)
 	if e != nil {
@@ -268,6 +286,16 @@ func (r *Router) pickingLocation(w http.ResponseWriter, q *http.Request) {
 func (r *Router) pickingBarcode(w http.ResponseWriter, q *http.Request) {
 	r.movementValidation(w, q, func(c movementapp.Command, v string) (movementdomain.Task, error) {
 		return r.picking.ResolveBarcode(q.Context(), c, v)
+	})
+}
+func (r *Router) pickingLot(w http.ResponseWriter, q *http.Request) {
+	r.movementValidation(w, q, func(c movementapp.Command, v string) (movementdomain.Task, error) {
+		return r.picking.ValidateLot(q.Context(), c, v)
+	})
+}
+func (r *Router) pickingDestination(w http.ResponseWriter, q *http.Request) {
+	r.movementValidation(w, q, func(c movementapp.Command, v string) (movementdomain.Task, error) {
+		return r.picking.ValidateDestination(q.Context(), c, v)
 	})
 }
 func (r *Router) pickingConfirm(w http.ResponseWriter, q *http.Request) {

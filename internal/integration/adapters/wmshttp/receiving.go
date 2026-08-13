@@ -310,6 +310,30 @@ func normalizeBarcode(value string) string {
 }
 
 func (a *ReceivingAdapter) ConfirmBatch(ctx context.Context, command receivingapp.BatchConfirmCommand) (receivingdomain.Task, error) {
+	ownerReceipt, ownerErr := a.client.GetReceipt(ctx, command.TaskID)
+	if ownerErr != nil {
+		return receivingdomain.Task{}, ownerErr
+	}
+	if strings.EqualFold(ownerReceipt.Status, "CONFIRMED") || strings.EqualFold(ownerReceipt.ConfirmationStatus, "CONFIRMED") {
+		lines := make([]ports.ReceiptBatchLine, 0, len(command.Lines))
+		for _, line := range command.Lines {
+			var ownerLine *ports.ReceiptLine
+			for i := range ownerReceipt.Lines {
+				if ownerReceipt.Lines[i].LineID == line.LineID {
+					ownerLine = &ownerReceipt.Lines[i]
+					break
+				}
+			}
+			if ownerLine == nil {
+				return receivingdomain.Task{}, receivingdomain.ErrBarcodeWrongContext
+			}
+			lines = append(lines, ports.ReceiptBatchLine{LineID: line.LineID, ActualQuantity: float64(line.ActualQuantity), UOMCode: line.UOMCode, ItemRevisionID: line.ItemRevisionID, LotCode: line.LotCode})
+		}
+		if _, err := a.client.ReceiveReceipt(ctx, command.TaskID, ports.ReceiptBatchRequest{CommandID: command.CommandID.String(), ExpectedReceiptVersion: ownerReceipt.AssignmentVersion, Lines: lines, IdempotencyKey: command.IdempotencyKey}); err != nil {
+			return receivingdomain.Task{}, err
+		}
+		return a.Detail(ctx, command.TaskID, command.Actor)
+	}
 	task, err := a.Detail(ctx, command.TaskID, command.Actor)
 	if err != nil {
 		return receivingdomain.Task{}, err
@@ -324,7 +348,10 @@ func (a *ReceivingAdapter) ConfirmBatch(ctx context.Context, command receivingap
 	if len(lines) == 0 {
 		return receivingdomain.Task{}, fmt.Errorf("RECEIPT_LINES_REQUIRED")
 	}
-	if _, err := a.client.ReceiveReceipt(ctx, command.TaskID, ports.ReceiptBatchRequest{CommandID: command.CommandID.String(), ExpectedReceiptVersion: command.BaseVersion, Lines: lines, IdempotencyKey: command.IdempotencyKey}); err != nil {
+	// Inbound versions the assignment/receipt owner state independently from
+	// the PDA task projection. Use the authoritative owner version instead of
+	// forwarding the PDA workflow version, which may advance on START.
+	if _, err := a.client.ReceiveReceipt(ctx, command.TaskID, ports.ReceiptBatchRequest{CommandID: command.CommandID.String(), ExpectedReceiptVersion: ownerReceipt.AssignmentVersion, Lines: lines, IdempotencyKey: command.IdempotencyKey}); err != nil {
 		return receivingdomain.Task{}, err
 	}
 	return a.Detail(ctx, command.TaskID, command.Actor)
