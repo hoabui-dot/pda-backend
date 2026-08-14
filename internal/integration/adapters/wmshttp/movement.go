@@ -29,6 +29,12 @@ func (a *movementAdapter) list(ctx context.Context, actor platform.ActorContext)
 	}
 	out := make([]movementdomain.Task, 0, len(rows))
 	for _, row := range rows {
+		// Production Picking is supervisor-assigned work. It may be projected
+		// downstream before assignment, but it is not an operator mission until
+		// WEX has assigned it to this operator.
+		if a.workflow == "PICKING" && row.AssignedOperatorID == nil {
+			continue
+		}
 		if row.AssignedOperatorID != nil && *row.AssignedOperatorID != actor.OperatorID {
 			continue
 		}
@@ -189,6 +195,13 @@ func (a *PickingAdapter) Detail(c context.Context, id string, x platform.ActorCo
 	return a.detail(c, id, x)
 }
 func (a *PickingAdapter) Claim(c context.Context, x movementapp.Command) (movementdomain.Task, error) {
+	current, err := a.detail(c, x.TaskID, x.Actor)
+	if err != nil {
+		return movementdomain.Task{}, err
+	}
+	if current.OperatorID == nil || *current.OperatorID != x.Actor.OperatorID {
+		return movementdomain.Task{}, movementdomain.ErrNotAssigned
+	}
 	row, err := a.client.ApplyExecutionTaskCommand(c, x.TaskID, executionTaskCommand{CommandID: x.CommandID.String(), CommandType: "CLAIM", ExpectedVersion: x.BaseVersion, CorrelationID: x.Actor.CorrelationID}, x.Actor.OperatorID, x.IdempotencyKey)
 	if err != nil {
 		return movementdomain.Task{}, err
