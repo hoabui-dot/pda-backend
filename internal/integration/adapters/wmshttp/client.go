@@ -246,6 +246,9 @@ func (c *Client) ListReceipts(ctx context.Context, query ports.ReceiptQuery) ([]
 	if query.Query != "" {
 		params.Set("q", query.Query)
 	}
+	if query.SourceType != "" {
+		params.Set("source_type", query.SourceType)
+	}
 	if query.Limit > 0 {
 		params.Set("limit", fmt.Sprintf("%d", query.Limit))
 	}

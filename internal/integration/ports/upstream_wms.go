@@ -42,35 +42,52 @@ type ReceiptQuery struct {
 	WarehouseLocationID string
 	AssignedOperatorID  string
 	Query               string
+	SourceType          string
 	Limit               int
 }
 
 type ReceiptSummary struct {
-	ReceiptID           string        `json:"receipt_id"`
-	ReceiptCode         string        `json:"receipt_code"`
-	WarehouseLocationID string        `json:"warehouse_location_id"`
-	Status              string        `json:"status"`
-	ConfirmationStatus  string        `json:"confirmation_status"`
-	LineCount           int           `json:"line_count"`
-	Lines               []ReceiptLine `json:"lines"`
-	AssignedOperatorID  *string       `json:"assigned_operator_id"`
-	AssignmentStatus    string        `json:"assignment_status"`
-	AssignmentVersion   int64         `json:"assignment_version"`
-	CreatedAt           time.Time     `json:"created_at"`
-	UpdatedAt           time.Time     `json:"updated_at"`
+	ReceiptID            string        `json:"receipt_id"`
+	ReceiptCode          string        `json:"receipt_code"`
+	WarehouseLocationID  string        `json:"warehouse_location_id"`
+	Status               string        `json:"status"`
+	ConfirmationStatus   string        `json:"confirmation_status"`
+	LineCount            int           `json:"line_count"`
+	Lines                []ReceiptLine `json:"lines"`
+	AssignedOperatorID   *string       `json:"assigned_operator_id"`
+	AssignmentStatus     string        `json:"assignment_status"`
+	AssignmentVersion    int64         `json:"assignment_version"`
+	SourceType           string        `json:"source_type"`
+	SourceSystem         string        `json:"source_system"`
+	SourceDocumentType   string        `json:"source_document_type"`
+	SourceRequestID      string        `json:"source_request_id"`
+	SourceOutputID       string        `json:"source_output_id"`
+	SourceWOID           string        `json:"source_wo_id"`
+	SourceWOCode         string        `json:"source_wo_code"`
+	SourceConfirmationID string        `json:"source_confirmation_id"`
+	CreatedAt            time.Time     `json:"created_at"`
+	UpdatedAt            time.Time     `json:"updated_at"`
 }
 
 type Receipt struct {
-	ReceiptID           string        `json:"receipt_id"`
-	ReceiptCode         string        `json:"receipt_code"`
-	WarehouseLocationID string        `json:"warehouse_location_id"`
-	Status              string        `json:"status"`
-	ConfirmationStatus  string        `json:"confirmation_status"`
-	AssignedOperatorID  *string       `json:"assigned_operator_id"`
-	AssignmentStatus    string        `json:"assignment_status"`
-	AssignmentVersion   int64         `json:"assignment_version"`
-	UpdatedAt           time.Time     `json:"updated_at"`
-	Lines               []ReceiptLine `json:"lines"`
+	ReceiptID            string        `json:"receipt_id"`
+	ReceiptCode          string        `json:"receipt_code"`
+	WarehouseLocationID  string        `json:"warehouse_location_id"`
+	Status               string        `json:"status"`
+	ConfirmationStatus   string        `json:"confirmation_status"`
+	AssignedOperatorID   *string       `json:"assigned_operator_id"`
+	AssignmentStatus     string        `json:"assignment_status"`
+	AssignmentVersion    int64         `json:"assignment_version"`
+	SourceType           string        `json:"source_type"`
+	SourceSystem         string        `json:"source_system"`
+	SourceDocumentType   string        `json:"source_document_type"`
+	SourceRequestID      string        `json:"source_request_id"`
+	SourceOutputID       string        `json:"source_output_id"`
+	SourceWOID           string        `json:"source_wo_id"`
+	SourceWOCode         string        `json:"source_wo_code"`
+	SourceConfirmationID string        `json:"source_confirmation_id"`
+	UpdatedAt            time.Time     `json:"updated_at"`
+	Lines                []ReceiptLine `json:"lines"`
 }
 
 type ReceiptLine struct {

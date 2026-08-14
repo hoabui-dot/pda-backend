@@ -75,7 +75,9 @@ func (a *ReceivingAdapter) List(ctx context.Context, f receivingports.Filter, ac
 				WarehouseLocationID: row.WarehouseLocationID, Status: row.Status,
 				ConfirmationStatus: row.ConfirmationStatus, AssignedOperatorID: row.AssignedOperatorID,
 				AssignmentStatus: row.AssignmentStatus, AssignmentVersion: row.AssignmentVersion,
-				UpdatedAt: row.UpdatedAt, Lines: row.Lines,
+				UpdatedAt: row.UpdatedAt, Lines: row.Lines, SourceType: row.SourceType, SourceSystem: row.SourceSystem,
+				SourceDocumentType: row.SourceDocumentType, SourceRequestID: row.SourceRequestID, SourceOutputID: row.SourceOutputID,
+				SourceWOID: row.SourceWOID, SourceWOCode: row.SourceWOCode, SourceConfirmationID: row.SourceConfirmationID,
 			}, actor.WarehouseID))
 			continue
 		}
@@ -118,7 +120,15 @@ func mapReceiptTask(receipt ports.Receipt, warehouseID string) receivingdomain.T
 	if updatedAt.IsZero() {
 		updatedAt = time.Unix(0, 0).UTC()
 	}
-	task := receivingdomain.Task{ID: receipt.ReceiptID, OrderID: receipt.ReceiptID, PONumber: receipt.ReceiptCode, WarehouseID: warehouseID, Status: receiptTaskStatus(receipt.Status, receipt.ConfirmationStatus, receipt.AssignmentStatus), OperatorID: receipt.AssignedOperatorID, Version: version, UpdatedAt: updatedAt}
+	documentCode := receipt.ReceiptCode
+	if receipt.SourceType == "PRODUCTION_FINISHED_GOODS" && receipt.SourceWOCode != "" {
+		documentCode = receipt.SourceWOCode
+	}
+	task := receivingdomain.Task{ID: receipt.ReceiptID, OrderID: receipt.ReceiptID, PONumber: receipt.ReceiptCode, Supplier: "", WarehouseID: warehouseID,
+		SourceType: receipt.SourceType, SourceSystem: receipt.SourceSystem, SourceDocumentType: receipt.SourceDocumentType,
+		SourceDocumentID: receipt.SourceRequestID, SourceDocumentCode: documentCode, WorkOrderID: receipt.SourceWOID, WorkOrderCode: receipt.SourceWOCode,
+		ProductionOutputID: receipt.SourceOutputID, ReceiptRequestID: receipt.SourceRequestID, SourceConfirmationID: receipt.SourceConfirmationID,
+		Status: receiptTaskStatus(receipt.Status, receipt.ConfirmationStatus, receipt.AssignmentStatus), OperatorID: receipt.AssignedOperatorID, Version: version, UpdatedAt: updatedAt}
 	for _, line := range receipt.Lines {
 		if line.LineID == "" {
 			continue

@@ -47,3 +47,19 @@ func TestMapReceiptTaskPreservesAuthoritativeItemName(t *testing.T) {
 		t.Fatalf("receiving line item name = %+v, want authoritative item name", task.Lines)
 	}
 }
+
+func TestMapReceiptTaskPreservesProductionSourceWithoutFakePurchaseOrder(t *testing.T) {
+	task := mapReceiptTask(ports.Receipt{
+		ReceiptID: "receipt-fg", ReceiptCode: "RCV-FG-001", WarehouseLocationID: "location-1",
+		SourceType: "PRODUCTION_FINISHED_GOODS", SourceSystem: "MES", SourceDocumentType: "WORK_ORDER",
+		SourceRequestID: "request-1", SourceOutputID: "output-1", SourceWOID: "wo-1", SourceWOCode: "WO-2026-001",
+		SourceConfirmationID: "confirmation-1",
+	}, "warehouse-1")
+
+	if task.SourceType != "PRODUCTION_FINISHED_GOODS" || task.SourceDocumentCode != "WO-2026-001" || task.WorkOrderCode != "WO-2026-001" {
+		t.Fatalf("production lineage = %+v", task)
+	}
+	if task.Supplier != "" || task.PONumber != "RCV-FG-001" {
+		t.Fatalf("production receipt must not be presented as a fake PO: %+v", task)
+	}
+}

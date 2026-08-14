@@ -52,17 +52,27 @@ type Line struct {
 	SerialRequired     bool   `json:"serialRequired"`
 }
 type Task struct {
-	ID          string    `json:"id"`
-	OrderID     string    `json:"orderId"`
-	PONumber    string    `json:"poNumber"`
-	Supplier    string    `json:"supplier"`
-	Status      Status    `json:"status"`
-	WarehouseID string    `json:"warehouseId"`
-	OperatorID  *string   `json:"operatorId"`
-	Version     int64     `json:"version"`
-	Policy      Policy    `json:"policy"`
-	Lines       []Line    `json:"lines"`
-	UpdatedAt   time.Time `json:"updatedAt"`
+	ID                   string    `json:"id"`
+	OrderID              string    `json:"orderId"`
+	PONumber             string    `json:"poNumber"`
+	Supplier             string    `json:"supplier"`
+	SourceType           string    `json:"sourceType,omitempty"`
+	SourceSystem         string    `json:"sourceSystem,omitempty"`
+	SourceDocumentType   string    `json:"sourceDocumentType,omitempty"`
+	SourceDocumentID     string    `json:"sourceDocumentId,omitempty"`
+	SourceDocumentCode   string    `json:"sourceDocumentCode,omitempty"`
+	WorkOrderID          string    `json:"workOrderId,omitempty"`
+	WorkOrderCode        string    `json:"workOrderCode,omitempty"`
+	ProductionOutputID   string    `json:"productionOutputId,omitempty"`
+	ReceiptRequestID     string    `json:"receiptRequestId,omitempty"`
+	SourceConfirmationID string    `json:"sourceConfirmationId,omitempty"`
+	Status               Status    `json:"status"`
+	WarehouseID          string    `json:"warehouseId"`
+	OperatorID           *string   `json:"operatorId"`
+	Version              int64     `json:"version"`
+	Policy               Policy    `json:"policy"`
+	Lines                []Line    `json:"lines"`
+	UpdatedAt            time.Time `json:"updatedAt"`
 }
 
 func (t *Task) Start(operator string, base int64, now time.Time) error {
