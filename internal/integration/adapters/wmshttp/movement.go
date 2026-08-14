@@ -92,7 +92,8 @@ func mapMovementTask(row executionTask, workflow string) movementdomain.Task {
 		DestinationLocationID: stringValue(row.Details, "destination_location_id"), DestinationLocationCode: stringValue(row.Details, "destination_location_code"),
 		DestinationCode:  stringValue(row.Details, "destination_location_code", "destination_location_code"),
 		DestinationBinID: stringValue(row.Details, "destination_bin_id"), DestinationBinCode: stringValue(row.Details, "destination_bin_code"),
-		ItemID: stringValue(row.Details, "item_revision_id", "item_id"), Barcode: stringValue(row.Details, "barcode", "item_code"), Lot: lot, ScanRequirements: requirements,
+		ItemID: stringValue(row.Details, "item_revision_id", "item_id"), ItemCode: stringValue(row.Details, "item_code", "barcode"), ItemName: stringValue(row.Details, "item_name"), Barcode: stringValue(row.Details, "barcode", "item_code"), Lot: lot, LotID: stringValue(row.Details, "lot_id"), UOMCode: stringValue(row.Details, "uom_code"),
+		SalesFulfillmentID: stringValue(row.Details, "sales_fulfillment_id", "fulfillment_id"), SalesOrderID: stringValue(row.Details, "sales_order_id"), SalesOrderCode: stringValue(row.Details, "sales_order_code"), MaterialRequestID: stringValue(row.Details, "material_request_id"), WorkOrderID: stringValue(row.Details, "work_order_id"), WorkOrderCode: stringValue(row.Details, "work_order_code"), ScanRequirements: requirements,
 	}
 }
 func number(m map[string]any, keys ...string) float64 {

@@ -54,6 +54,16 @@ type Task struct {
 	DestinationBinID        string    `json:"destinationBinId,omitempty"`
 	DestinationBinCode      string    `json:"destinationBinCode,omitempty"`
 	ItemID                  string    `json:"itemId"`
+	ItemCode                string    `json:"itemCode,omitempty"`
+	ItemName                string    `json:"itemName,omitempty"`
+	SalesFulfillmentID      string    `json:"salesFulfillmentId,omitempty"`
+	SalesOrderID            string    `json:"salesOrderId,omitempty"`
+	SalesOrderCode          string    `json:"salesOrderCode,omitempty"`
+	MaterialRequestID       string    `json:"materialRequestId,omitempty"`
+	WorkOrderID             string    `json:"workOrderId,omitempty"`
+	WorkOrderCode           string    `json:"workOrderCode,omitempty"`
+	LotID                   string    `json:"lotId,omitempty"`
+	UOMCode                 string    `json:"uomCode,omitempty"`
 	Barcode                 string    `json:"barcode"`
 	Lot                     string    `json:"lot,omitempty"`
 	RequiredQuantity        int64     `json:"requiredQuantity"`
