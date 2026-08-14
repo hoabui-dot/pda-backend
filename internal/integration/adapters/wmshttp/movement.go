@@ -59,6 +59,9 @@ func (a *movementAdapter) detail(ctx context.Context, id string, actor platform.
 	if warehouseID != "" && row.WarehouseID != warehouseID || row.AssignedOperatorID != nil && *row.AssignedOperatorID != actor.OperatorID {
 		return movementdomain.Task{}, &platform.DomainError{Code: "WAREHOUSE_ACCESS_DENIED", SafeMessage: "Movement task access denied"}
 	}
+	if a.workflow == "PICKING" && row.AssignedOperatorID == nil {
+		return movementdomain.Task{}, movementdomain.ErrNotAssigned
+	}
 	return mapMovementTask(row, a.workflow), nil
 }
 func (a *movementAdapter) scan(ctx context.Context, c movementapp.Command, typ, value string) (movementdomain.Task, error) {
