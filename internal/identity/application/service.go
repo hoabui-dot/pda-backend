@@ -13,16 +13,25 @@ import (
 var (
 	ErrInvalidCredentials  = &platform.DomainError{Code: "AUTH_INVALID_CREDENTIALS", SafeMessage: "Invalid credentials"}
 	ErrUnauthorized        = &platform.DomainError{Code: "AUTH_SESSION_EXPIRED", SafeMessage: "Authentication is required"}
+	ErrAccessTokenExpired  = &platform.DomainError{Code: "ACCESS_TOKEN_EXPIRED", SafeMessage: "Access token has expired."}
+	ErrAccessTokenInvalid  = &platform.DomainError{Code: "ACCESS_TOKEN_INVALID", SafeMessage: "Access token is invalid."}
+	ErrRefreshTokenInvalid = &platform.DomainError{Code: "REFRESH_TOKEN_INVALID", SafeMessage: "Refresh token is invalid."}
+	ErrRefreshTokenExpired = &platform.DomainError{Code: "REFRESH_TOKEN_EXPIRED", SafeMessage: "Refresh token has expired."}
+	ErrRefreshTokenRevoked = &platform.DomainError{Code: "REFRESH_TOKEN_REVOKED", SafeMessage: "Refresh token has been revoked."}
+	ErrRefreshTokenReused  = &platform.DomainError{Code: "REFRESH_TOKEN_REUSED", SafeMessage: "Refresh token has already been used."}
+	ErrSessionRevoked      = &platform.DomainError{Code: "SESSION_REVOKED", SafeMessage: "Session has been revoked."}
+	ErrUserDisabled        = &platform.DomainError{Code: "USER_DISABLED", SafeMessage: "User account is disabled."}
 	ErrWarehouseDenied     = &platform.DomainError{Code: "WAREHOUSE_ACCESS_DENIED", SafeMessage: "Warehouse access denied"}
 	ErrDeviceNotRegistered = &platform.DomainError{Code: "DEVICE_NOT_REGISTERED", SafeMessage: "Device is not registered"}
 )
 
 type Session struct {
-	AccessToken  string
-	RefreshToken string
-	ExpiresAt    time.Time
-	DeviceID     string
-	WarehouseID  string
+	AccessToken           string
+	RefreshToken          string
+	ExpiresAt             time.Time
+	RefreshTokenExpiresAt time.Time
+	DeviceID              string
+	WarehouseID           string
 }
 
 type Service struct {
@@ -144,11 +153,11 @@ func (s *Service) Authenticate(ctx context.Context, token string) (identity.Oper
 	if s.sessions != nil {
 		claims, err := s.sessions.Authenticate(ctx, token, s.now())
 		if err != nil {
-			return identity.Operator{}, ErrUnauthorized
+			return identity.Operator{}, mapSessionError(err, false)
 		}
 		operator, found, err := s.operators.ByID(ctx, claims.OperatorID)
 		if err != nil || !found || !operator.Active {
-			return identity.Operator{}, ErrUnauthorized
+			return identity.Operator{}, ErrUserDisabled
 		}
 		return operator, nil
 	}
@@ -167,6 +176,9 @@ func (s *Service) Authenticate(ctx context.Context, token string) (identity.Oper
 }
 
 func (s *Service) Refresh(ctx context.Context, token string) (string, error) {
+	if s.sessions != nil {
+		return "", ErrRefreshTokenInvalid
+	}
 	operator, err := s.Authenticate(ctx, token)
 	if err != nil {
 		return "", err
@@ -183,15 +195,15 @@ func (s *Service) RefreshSession(ctx context.Context, refreshToken string) (Sess
 
 func (s *Service) RefreshSessionContext(ctx context.Context, refreshToken, deviceID string) (Session, identity.Operator, error) {
 	if s.sessions != nil {
-		access, refresh, expires, operatorID, sessionDevice, warehouseID, err := s.sessions.Refresh(ctx, refreshToken, deviceID, s.now())
+		access, refresh, expires, refreshExpires, operatorID, sessionDevice, warehouseID, err := s.sessions.Refresh(ctx, refreshToken, deviceID, s.now())
 		if err != nil {
-			return Session{}, identity.Operator{}, ErrUnauthorized
+			return Session{}, identity.Operator{}, mapSessionError(err, true)
 		}
 		operator, found, err := s.operators.ByID(ctx, operatorID)
 		if err != nil || !found || !operator.Active {
-			return Session{}, identity.Operator{}, ErrUnauthorized
+			return Session{}, identity.Operator{}, ErrUserDisabled
 		}
-		return Session{AccessToken: access, RefreshToken: refresh, ExpiresAt: expires, DeviceID: sessionDevice, WarehouseID: warehouseID}, operator, nil
+		return Session{AccessToken: access, RefreshToken: refresh, ExpiresAt: expires, RefreshTokenExpiresAt: refreshExpires, DeviceID: sessionDevice, WarehouseID: warehouseID}, operator, nil
 	}
 	provider, ok := s.tokens.(ports.SessionTokenProvider)
 	if !ok {
@@ -220,24 +232,62 @@ func (s *Service) RefreshSessionContext(ctx context.Context, refreshToken, devic
 }
 
 func (s *Service) Logout(token string) error {
+	return s.LogoutContext(context.Background(), token, "")
+}
+
+func (s *Service) LogoutContext(ctx context.Context, accessToken, refreshToken string) error {
 	if s.sessions != nil {
-		if err := s.sessions.Logout(context.Background(), token, s.now()); err != nil {
-			return ErrUnauthorized
+		if refreshToken != "" {
+			if err := s.sessions.RevokeRefresh(ctx, refreshToken, s.now()); err != nil {
+				return mapSessionError(err, true)
+			}
+			return nil
+		}
+		if err := s.sessions.Logout(ctx, accessToken, s.now()); err != nil {
+			return mapSessionError(err, false)
 		}
 		return nil
 	}
-	if err := s.tokens.Revoke(token); err != nil {
+	if err := s.tokens.Revoke(accessToken); err != nil {
 		return ErrUnauthorized
 	}
 	return nil
 }
 
 func (s *Service) createProductionSession(ctx context.Context, operator identity.Operator, deviceID, warehouseID, correlationID string) (Session, identity.Operator, error) {
-	access, refresh, expires, err := s.sessions.Create(ctx, operator, deviceID, warehouseID, s.now())
+	access, refresh, expires, refreshExpires, err := s.sessions.Create(ctx, operator, deviceID, warehouseID, s.now())
 	if err != nil {
 		return Session{}, identity.Operator{}, err
 	}
-	return Session{AccessToken: access, RefreshToken: refresh, ExpiresAt: expires, DeviceID: deviceID, WarehouseID: warehouseID}, operator, nil
+	return Session{AccessToken: access, RefreshToken: refresh, ExpiresAt: expires, RefreshTokenExpiresAt: refreshExpires, DeviceID: deviceID, WarehouseID: warehouseID}, operator, nil
+}
+
+func mapSessionError(err error, refresh bool) error {
+	switch {
+	case errors.Is(err, ports.ErrAccessTokenExpired):
+		return ErrAccessTokenExpired
+	case errors.Is(err, ports.ErrAccessTokenInvalid):
+		return ErrAccessTokenInvalid
+	case errors.Is(err, ports.ErrRefreshTokenExpired):
+		return ErrRefreshTokenExpired
+	case errors.Is(err, ports.ErrRefreshTokenRevoked):
+		return ErrRefreshTokenRevoked
+	case errors.Is(err, ports.ErrRefreshTokenReused):
+		return ErrRefreshTokenReused
+	case errors.Is(err, ports.ErrRefreshTokenInvalid):
+		return ErrRefreshTokenInvalid
+	case errors.Is(err, ports.ErrSessionRevoked):
+		return ErrSessionRevoked
+	case errors.Is(err, ports.ErrUserDisabled):
+		return ErrUserDisabled
+	case errors.Is(err, ports.ErrDeviceMismatch):
+		return &platform.DomainError{Code: "SESSION_DEVICE_MISMATCH", SafeMessage: "Session device does not match."}
+	default:
+		if refresh {
+			return ErrRefreshTokenInvalid
+		}
+		return ErrUnauthorized
+	}
 }
 
 func (s *Service) Warehouses(ctx context.Context, operator identity.Operator) ([]identity.Warehouse, error) {

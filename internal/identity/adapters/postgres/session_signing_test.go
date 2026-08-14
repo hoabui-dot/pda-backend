@@ -20,7 +20,7 @@ func TestRS256SessionTokensSupportKeyOverlapAndRejectUnknownKeys(t *testing.T) {
 	manager, err := NewRSASessionManager(&Store{}, map[string]*rsa.PublicKey{
 		"old": &oldKey.PublicKey,
 		"new": &newKey.PublicKey,
-	}, newKey, "new", "pda", "pda-api", 15*time.Minute, time.Hour)
+	}, newKey, "new", "pda", "pda-api", 15*time.Minute, 30*24*time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -45,7 +45,7 @@ func TestRS256SessionTokensSupportKeyOverlapAndRejectUnknownKeys(t *testing.T) {
 		t.Fatalf("operator=%q, want OP-RSA", claims.OperatorID)
 	}
 
-	oldManager, err := NewRSASessionManager(&Store{}, map[string]*rsa.PublicKey{"old": &oldKey.PublicKey}, oldKey, "old", "pda", "pda-api", 15*time.Minute, time.Hour)
+	oldManager, err := NewRSASessionManager(&Store{}, map[string]*rsa.PublicKey{"old": &oldKey.PublicKey}, oldKey, "old", "pda", "pda-api", 15*time.Minute, 30*24*time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -65,7 +65,7 @@ func TestRS256SessionTokensSupportKeyOverlapAndRejectUnknownKeys(t *testing.T) {
 		t.Fatalf("retained old key was rejected: %v", err)
 	}
 
-	unknownKeyManager, err := NewRSASessionManager(&Store{}, map[string]*rsa.PublicKey{"new": &newKey.PublicKey}, newKey, "new", "pda", "pda-api", 15*time.Minute, time.Hour)
+	unknownKeyManager, err := NewRSASessionManager(&Store{}, map[string]*rsa.PublicKey{"new": &newKey.PublicKey}, newKey, "new", "pda", "pda-api", 15*time.Minute, 30*24*time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}

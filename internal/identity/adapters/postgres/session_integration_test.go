@@ -4,12 +4,14 @@ package postgres
 
 import (
 	"context"
+	"errors"
 	"os"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/company/pda-backend/internal/identity/adapters/security"
+	"github.com/company/pda-backend/internal/identity/ports"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -76,7 +78,7 @@ func TestSessionManagerPersistsRotationReuseAndLogout(t *testing.T) {
 	}
 
 	store := New(pool)
-	manager, err := NewSessionManager(store, []byte("integration-secret-with-at-least-32-bytes"), "pda", "pda-api", 15*time.Minute, time.Hour)
+	manager, err := NewSessionManager(store, []byte("integration-secret-with-at-least-32-bytes"), "pda", "pda-api", 15*time.Minute, 30*24*time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -85,14 +87,17 @@ func TestSessionManagerPersistsRotationReuseAndLogout(t *testing.T) {
 		t.Fatalf("load operator: found=%v err=%v", found, err)
 	}
 	now := time.Now().UTC().Truncate(time.Second)
-	access, refresh, _, err := manager.Create(ctx, operator, "DEV-INT", "WH-INT", now)
+	access, refresh, _, refreshExpires, err := manager.Create(ctx, operator, "DEV-INT", "WH-INT", now)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if want := now.Add(30 * 24 * time.Hour); !refreshExpires.Equal(want) {
+		t.Fatalf("refresh expiry=%s, want %s", refreshExpires, want)
 	}
 	if _, err = manager.Authenticate(ctx, access, now); err != nil {
 		t.Fatalf("initial access token: %v", err)
 	}
-	restartedManager, err := NewSessionManager(store, []byte("integration-secret-with-at-least-32-bytes"), "pda", "pda-api", 15*time.Minute, time.Hour)
+	restartedManager, err := NewSessionManager(store, []byte("integration-secret-with-at-least-32-bytes"), "pda", "pda-api", 15*time.Minute, 30*24*time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -100,28 +105,31 @@ func TestSessionManagerPersistsRotationReuseAndLogout(t *testing.T) {
 		t.Fatalf("session did not survive manager restart: %v", err)
 	}
 
-	rotatedAccess, rotatedRefresh, _, _, _, _, err := manager.Refresh(ctx, refresh, "DEV-INT", now.Add(time.Second))
+	rotatedAccess, rotatedRefresh, _, rotatedExpiry, _, _, _, err := manager.Refresh(ctx, refresh, "DEV-INT", now.Add(time.Second))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if rotatedRefresh == refresh {
 		t.Fatal("refresh token was not rotated")
 	}
+	if !rotatedExpiry.Equal(refreshExpires) {
+		t.Fatalf("rotation extended refresh expiry to %s", rotatedExpiry)
+	}
 	if _, err = manager.Authenticate(ctx, rotatedAccess, now.Add(time.Second)); err != nil {
 		t.Fatalf("rotated access token: %v", err)
 	}
-	if _, _, _, _, _, _, err = manager.Refresh(ctx, refresh, "DEV-INT", now.Add(2*time.Second)); err == nil {
+	if _, _, _, _, _, _, _, err = manager.Refresh(ctx, refresh, "DEV-INT", now.Add(2*time.Second)); err == nil {
 		t.Fatal("expected refresh reuse to fail")
 	}
 	if _, err = manager.Authenticate(ctx, rotatedAccess, now.Add(2*time.Second)); err == nil {
 		t.Fatal("refresh reuse did not revoke the session")
 	}
 
-	_, logoutRefresh, _, err := manager.Create(ctx, operator, "DEV-INT", "WH-INT", now.Add(3*time.Second))
+	_, logoutRefresh, _, _, err := manager.Create(ctx, operator, "DEV-INT", "WH-INT", now.Add(3*time.Second))
 	if err != nil {
 		t.Fatal(err)
 	}
-	logoutAccess, _, _, _, _, _, err := manager.Refresh(ctx, logoutRefresh, "DEV-INT", now.Add(4*time.Second))
+	logoutAccess, _, _, _, _, _, _, err := manager.Refresh(ctx, logoutRefresh, "DEV-INT", now.Add(4*time.Second))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -135,14 +143,21 @@ func TestSessionManagerPersistsRotationReuseAndLogout(t *testing.T) {
 	if _, err = manager.Authenticate(ctx, logoutAccess, now.Add(5*time.Second)); err == nil {
 		t.Fatal("logout did not revoke access token")
 	}
-	if _, _, _, _, _, _, err = manager.Refresh(ctx, logoutRefresh, "DEV-INT", now.Add(5*time.Second)); err == nil {
+	if _, _, _, _, _, _, _, err = manager.Refresh(ctx, logoutRefresh, "DEV-INT", now.Add(5*time.Second)); err == nil {
 		t.Fatal("logout did not revoke refresh token")
 	}
 	if logoutClaims.SessionID == "" {
 		t.Fatal("logout session claims missing")
 	}
+	_, expiredRefresh, _, _, err := manager.Create(ctx, operator, "DEV-INT", "WH-INT", now.Add(8*time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, _, _, _, _, _, err = manager.Refresh(ctx, expiredRefresh, "DEV-INT", now.Add(8*time.Second+30*24*time.Hour)); !errors.Is(err, ports.ErrRefreshTokenExpired) {
+		t.Fatalf("expired refresh error=%v, want REFRESH_TOKEN_EXPIRED", err)
+	}
 
-	_, concurrentRefresh, _, err := manager.Create(ctx, operator, "DEV-INT", "WH-INT", now.Add(6*time.Second))
+	_, concurrentRefresh, _, _, err := manager.Create(ctx, operator, "DEV-INT", "WH-INT", now.Add(6*time.Second))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -156,7 +171,7 @@ func TestSessionManagerPersistsRotationReuseAndLogout(t *testing.T) {
 	for range 2 {
 		go func() {
 			defer wait.Done()
-			accessToken, _, _, _, _, _, refreshErr := manager.Refresh(ctx, concurrentRefresh, "DEV-INT", now.Add(7*time.Second))
+			accessToken, _, _, _, _, _, _, refreshErr := manager.Refresh(ctx, concurrentRefresh, "DEV-INT", now.Add(7*time.Second))
 			results <- refreshResult{access: accessToken, err: refreshErr}
 		}()
 	}

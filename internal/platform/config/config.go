@@ -67,7 +67,7 @@ func Load() (Config, error) {
 		TokenIssuer:             valueOrDefault("PDA_TOKEN_ISSUER", "pda-backend"),
 		TokenAudience:           valueOrDefault("PDA_TOKEN_AUDIENCE", "pda-app"),
 		AccessTokenTTL:          valueOrDefault("PDA_ACCESS_TOKEN_TTL", "15m"),
-		RefreshTokenTTL:         valueOrDefault("PDA_REFRESH_TOKEN_TTL", "168h"),
+		RefreshTokenTTL:         valueOrDefault("PDA_REFRESH_TOKEN_TTL", "720h"),
 		TokenSigningMode:        valueOrDefault("PDA_TOKEN_SIGNING_MODE", "HS256"),
 		TokenPrivateKeyFile:     valueOrDefault("PDA_TOKEN_PRIVATE_KEY_FILE", ""),
 		TokenPublicKeyFiles:     valueOrDefault("PDA_TOKEN_PUBLIC_KEY_FILES", ""),
@@ -114,8 +114,8 @@ func (c Config) Validate() error {
 		if ttl, err := time.ParseDuration(c.AccessTokenTTL); err != nil || ttl <= 0 {
 			return fmt.Errorf("invalid access token TTL")
 		}
-		if ttl, err := time.ParseDuration(c.RefreshTokenTTL); err != nil || ttl <= 0 {
-			return fmt.Errorf("invalid refresh token TTL")
+		if ttl, err := time.ParseDuration(c.RefreshTokenTTL); err != nil || ttl != 30*24*time.Hour {
+			return fmt.Errorf("refresh token TTL must be exactly 720h (30 days)")
 		}
 		if !oneOf(c.TokenSigningMode, "HS256", "RS256") {
 			return fmt.Errorf("invalid token signing mode %q", c.TokenSigningMode)

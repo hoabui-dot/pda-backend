@@ -420,7 +420,13 @@ func (r *Router) refresh(w http.ResponseWriter, req *http.Request) {
 	writeData(w, http.StatusOK, data, correlation(req.Context()), r.now())
 }
 func (r *Router) logout(w http.ResponseWriter, req *http.Request) {
-	if err := r.identity.Logout(strings.TrimPrefix(req.Header.Get("Authorization"), "Bearer ")); err != nil {
+	var input struct {
+		RefreshToken string `json:"refreshToken"`
+	}
+	if req.ContentLength > 0 {
+		_ = decode(req, &input)
+	}
+	if err := r.identity.LogoutContext(req.Context(), strings.TrimPrefix(req.Header.Get("Authorization"), "Bearer "), input.RefreshToken); err != nil {
 		writeError(w, err, correlation(req.Context()))
 		return
 	}
@@ -490,7 +496,14 @@ func (r *Router) sessionData(ctx context.Context, operator identity.Operator, se
 		return nil, err
 	}
 	assignments := r.operatorAssignments(ctx, operator, warehouses)
-	return map[string]any{"accessToken": session.AccessToken, "refreshToken": session.RefreshToken, "tokenType": "Bearer", "expiresAt": session.ExpiresAt.UTC(), "operatorId": operator.ID, "employeeCode": operator.EmployeeCode, "displayName": operator.DisplayName, "username": operator.Username, "roles": operator.Roles, "permissions": operator.Permissions, "warehouseId": warehouseID, "warehouseName": warehouseName, "warehouseAssignments": assignments.Warehouses, "areaAssignments": assignments.Areas, "shiftCode": operator.ShiftCode, "deviceRegistrationStatus": deviceStatus, "featureFlags": map[string]bool{}, "scannerPolicy": map[string]any{}, "localePolicy": []string{"en-US", "vi-VN"}}, nil
+	accessExpiresIn := 0
+	if !session.ExpiresAt.IsZero() {
+		accessExpiresIn = int(session.ExpiresAt.Sub(r.now()).Seconds())
+	}
+	if accessExpiresIn < 0 {
+		accessExpiresIn = 0
+	}
+	return map[string]any{"accessToken": session.AccessToken, "refreshToken": session.RefreshToken, "tokenType": "Bearer", "expiresAt": session.ExpiresAt.UTC(), "accessTokenExpiresIn": accessExpiresIn, "refreshTokenExpiresAt": session.RefreshTokenExpiresAt.UTC(), "operatorId": operator.ID, "employeeCode": operator.EmployeeCode, "displayName": operator.DisplayName, "username": operator.Username, "roles": operator.Roles, "permissions": operator.Permissions, "warehouseId": warehouseID, "warehouseName": warehouseName, "warehouseAssignments": assignments.Warehouses, "areaAssignments": assignments.Areas, "shiftCode": operator.ShiftCode, "deviceRegistrationStatus": deviceStatus, "featureFlags": map[string]bool{}, "scannerPolicy": map[string]any{}, "localePolicy": []string{"en-US", "vi-VN"}}, nil
 }
 
 type operatorAssignments struct {
@@ -1173,13 +1186,13 @@ func writeError(w http.ResponseWriter, err error, correlationID string) {
 	switch domainError.Code {
 	case "INVALID_REQUEST", "DEVICE_NOT_REGISTERED":
 		status = http.StatusBadRequest
-	case "AUTH_INVALID_CREDENTIALS", "AUTH_SESSION_EXPIRED", "AUTH_TOKEN_INVALID", "AUTH_TOKEN_REVOKED", "UPSTREAM_UNAUTHORIZED":
+	case "AUTH_INVALID_CREDENTIALS", "AUTH_SESSION_EXPIRED", "AUTH_TOKEN_INVALID", "AUTH_TOKEN_REVOKED", "UPSTREAM_UNAUTHORIZED", "ACCESS_TOKEN_EXPIRED", "ACCESS_TOKEN_INVALID", "REFRESH_TOKEN_INVALID", "REFRESH_TOKEN_EXPIRED", "REFRESH_TOKEN_REVOKED", "REFRESH_TOKEN_REUSED", "SESSION_REVOKED":
 		status = http.StatusUnauthorized
 	case "AUTH_ACCOUNT_LOCKED":
 		status = http.StatusTooManyRequests
-	case "AUTH_ACCOUNT_DISABLED":
+	case "AUTH_ACCOUNT_DISABLED", "USER_DISABLED":
 		status = http.StatusForbidden
-	case "WAREHOUSE_ACCESS_DENIED", "OPERATOR_CONTEXT_MISMATCH":
+	case "WAREHOUSE_ACCESS_DENIED", "OPERATOR_CONTEXT_MISMATCH", "SESSION_DEVICE_MISMATCH":
 		status = http.StatusForbidden
 	case "RATE_LIMITED":
 		status = http.StatusTooManyRequests

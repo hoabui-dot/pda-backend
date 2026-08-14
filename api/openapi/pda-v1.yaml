@@ -593,12 +593,14 @@ components:
         deviceId: {type: string, minLength: 1, maxLength: 128}
     Session:
       type: object
-      required: [accessToken, refreshToken, tokenType, expiresAt, operatorId, employeeCode, displayName, username, roles, permissions, deviceRegistrationStatus, featureFlags, scannerPolicy, localePolicy]
+      required: [accessToken, refreshToken, tokenType, expiresAt, accessTokenExpiresIn, refreshTokenExpiresAt, operatorId, employeeCode, displayName, username, roles, permissions, deviceRegistrationStatus, featureFlags, scannerPolicy, localePolicy]
       properties:
         accessToken: {type: string}
         refreshToken: {type: string}
         tokenType: {type: string, enum: [Bearer]}
         expiresAt: {type: string, format: date-time}
+        accessTokenExpiresIn: {type: integer, format: int32, minimum: 0}
+        refreshTokenExpiresAt: {type: string, format: date-time}
         operatorId: {type: string}
         employeeCode: {type: string}
         displayName: {type: string}

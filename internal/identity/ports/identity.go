@@ -10,6 +10,15 @@ import (
 
 var ErrLoginLocked = errors.New("identity account locked")
 var ErrLoginDisabled = errors.New("identity account disabled")
+var ErrAccessTokenExpired = errors.New("access token expired")
+var ErrAccessTokenInvalid = errors.New("access token invalid")
+var ErrRefreshTokenInvalid = errors.New("refresh token invalid")
+var ErrRefreshTokenExpired = errors.New("refresh token expired")
+var ErrRefreshTokenRevoked = errors.New("refresh token revoked")
+var ErrRefreshTokenReused = errors.New("refresh token reused")
+var ErrSessionRevoked = errors.New("session revoked")
+var ErrUserDisabled = errors.New("user disabled")
+var ErrDeviceMismatch = errors.New("session device mismatch")
 
 type Claims struct {
 	OperatorID, TokenID, SessionID, DeviceID, WarehouseID string
@@ -27,10 +36,11 @@ type LoginProtector interface {
 }
 
 type SessionManager interface {
-	Create(context.Context, identity.Operator, string, string, time.Time) (accessToken, refreshToken string, expiresAt time.Time, err error)
+	Create(context.Context, identity.Operator, string, string, time.Time) (accessToken, refreshToken string, accessExpiresAt, refreshExpiresAt time.Time, err error)
 	Authenticate(context.Context, string, time.Time) (Claims, error)
-	Refresh(context.Context, string, string, time.Time) (accessToken, refreshToken string, expiresAt time.Time, operatorID, deviceID, warehouseID string, err error)
+	Refresh(context.Context, string, string, time.Time) (accessToken, refreshToken string, accessExpiresAt, refreshExpiresAt time.Time, operatorID, deviceID, warehouseID string, err error)
 	Logout(context.Context, string, time.Time) error
+	RevokeRefresh(context.Context, string, time.Time) error
 }
 
 type OperatorRepository interface {
