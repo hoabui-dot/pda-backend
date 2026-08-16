@@ -120,6 +120,8 @@ func New(identityService *identityapp.Service, taskService gatewayports.TaskOper
 			protected.With(router.deviceWarehouseContext).Post("/putaway/tasks/{taskId}/start", router.putawayStart)
 			protected.With(router.deviceWarehouseContext).Post("/putaway/tasks/{taskId}/source-validations", router.putawaySource)
 			protected.With(router.deviceWarehouseContext).Post("/putaway/{taskId}/validate-source", router.putawaySource)
+			protected.With(router.deviceWarehouseContext).Post("/putaway/tasks/{taskId}/lpn-validations", router.putawayLPN)
+			protected.With(router.deviceWarehouseContext).Post("/putaway/{taskId}/validate-lpn", router.putawayLPN)
 			protected.With(router.deviceWarehouseContext).Post("/putaway/tasks/{taskId}/item-validations", router.putawayItem)
 			protected.With(router.deviceWarehouseContext).Post("/putaway/{taskId}/validate-item", router.putawayItem)
 			protected.With(router.deviceWarehouseContext).Post("/putaway/tasks/{taskId}/lot-validations", router.putawayLot)
@@ -128,6 +130,7 @@ func New(identityService *identityapp.Service, taskService gatewayports.TaskOper
 			protected.With(router.deviceWarehouseContext).Post("/putaway/tasks/{taskId}/destination-validations", router.putawayDestination)
 			protected.With(router.deviceWarehouseContext).Post("/putaway/{taskId}/validate-destination", router.putawayDestination)
 			protected.With(router.deviceWarehouseContext).Post("/putaway/tasks/{taskId}/confirmation", router.putawayConfirm)
+			protected.With(router.deviceWarehouseContext).Post("/putaway/tasks/{taskId}/group-confirmation", router.putawayGroupConfirm)
 			protected.With(router.deviceWarehouseContext).Post("/putaway/{taskId}/confirm", router.putawayConfirm)
 			protected.With(router.deviceWarehouseContext).Get("/picking/tasks", router.pickingList)
 			protected.With(router.deviceWarehouseContext).Get("/picking/tasks/{taskId}", router.pickingDetail)
@@ -749,7 +752,8 @@ func receivingTaskView(task receivingdomain.Task, operatorID string) map[string]
 		"createdAt":          task.UpdatedAt.UTC(),
 		"updatedAt":          task.UpdatedAt.UTC(),
 		"warehouseId":        task.WarehouseID,
-		"purchaseOrderId":    task.PONumber,
+		"purchaseOrderId":    task.LPNCode,
+		"lpnCode":            task.LPNCode,
 		"supplier":           task.Supplier,
 		"lines":              lines,
 	}
@@ -903,7 +907,11 @@ func (r *Router) receivingBarcode(w http.ResponseWriter, req *http.Request) {
 		writeError(w, &platform.DomainError{Code: "INVALID_REQUEST", SafeMessage: "Barcode is required"}, correlation(req.Context()))
 		return
 	}
-	if input.TaskID != "" && input.TaskID != chi.URLParam(req, "taskId") || input.ScanContext != "" && input.ScanContext != "RECEIVING_ITEM" && input.ScanContext != "RECEIVING_LOT" {
+	scanContext := input.ScanContext
+	if scanContext == "" {
+		scanContext = "RECEIVING_ITEM"
+	}
+	if input.TaskID != "" && input.TaskID != chi.URLParam(req, "taskId") || scanContext != "RECEIVING_ITEM" && scanContext != "RECEIVING_LOT" && scanContext != "RECEIVING_LPN" {
 		writeError(w, &platform.DomainError{Code: "BARCODE_WRONG_CONTEXT", SafeMessage: "Barcode scan context is invalid"}, correlation(req.Context()))
 		return
 	}
@@ -914,7 +922,13 @@ func (r *Router) receivingBarcode(w http.ResponseWriter, req *http.Request) {
 	}
 	var line receivingdomain.Line
 	var err error
-	if resolver, ok := r.receiving.(gatewayports.ReceivingBarcodeOperations); ok {
+	if resolver, ok := r.receiving.(gatewayports.ReceivingScanContextOperations); ok {
+		symbology := strings.ToUpper(strings.TrimSpace(input.Symbology))
+		if symbology == "" {
+			symbology = "UNKNOWN"
+		}
+		line, err = resolver.ResolveBarcodeWithContext(req.Context(), chi.URLParam(req, "taskId"), barcode, symbology, scanContext, actor)
+	} else if resolver, ok := r.receiving.(gatewayports.ReceivingBarcodeOperations); ok {
 		symbology := strings.ToUpper(strings.TrimSpace(input.Symbology))
 		if symbology == "" {
 			symbology = "UNKNOWN"
@@ -927,11 +941,11 @@ func (r *Router) receivingBarcode(w http.ResponseWriter, req *http.Request) {
 		writeError(w, err, correlation(req.Context()))
 		return
 	}
-	scanContext := input.ScanContext
-	if scanContext == "" {
-		scanContext = "RECEIVING_ITEM"
+	nextStep := "CONFIRM_QUANTITY"
+	if line.ReceiptVerified {
+		nextStep = "SCAN_ITEM"
 	}
-	writeData(w, http.StatusOK, map[string]any{"lineId": line.ID, "itemId": line.ItemID, "sku": line.SKU, "itemName": line.ItemName, "barcode": line.Barcode, "rawValue": input.RawValue, "normalizedValue": barcode, "symbology": input.Symbology, "scanContext": scanContext, "remainingQuantity": line.ExpectedQuantity - line.ReceivedQuantity, "quantityPolicy": map[string]any{"allowOverReceipt": false}, "nextStep": "CONFIRM_QUANTITY", "taskVersion": nil, "scannedAt": input.ScannedAt}, correlation(req.Context()), r.now())
+	writeData(w, http.StatusOK, map[string]any{"lineId": line.ID, "itemId": line.ItemID, "sku": line.SKU, "itemName": line.ItemName, "barcode": line.Barcode, "rawValue": input.RawValue, "normalizedValue": barcode, "symbology": input.Symbology, "scanContext": scanContext, "receiptVerified": line.ReceiptVerified, "remainingQuantity": line.ExpectedQuantity - line.ReceivedQuantity, "quantityPolicy": map[string]any{"allowOverReceipt": false}, "nextStep": nextStep, "taskVersion": nil, "scannedAt": input.ScannedAt}, correlation(req.Context()), r.now())
 }
 func (r *Router) receivingConfirm(w http.ResponseWriter, req *http.Request) {
 	base, err := r.receivingBaseCommand(req)
@@ -1045,7 +1059,7 @@ func receivingView(task receivingdomain.Task) map[string]any {
 		received += line.ReceivedQuantity
 		lines = append(lines, map[string]any{"lineId": line.ID, "itemId": line.ItemID, "sku": line.SKU, "itemName": line.ItemName, "barcode": line.Barcode, "lotCode": line.LotCode, "uomCode": line.UOMCode, "expectedQuantity": line.ExpectedQuantity, "receivedQuantity": line.ReceivedQuantity, "remainingQuantity": line.ExpectedQuantity - line.ReceivedQuantity, "lotRequired": task.Policy.LotRequired, "serialRequired": task.Policy.SerialRequired})
 	}
-	return map[string]any{"taskId": task.ID, "orderId": task.OrderID, "purchaseOrderId": task.PONumber, "poNumber": task.PONumber, "supplier": task.Supplier, "status": task.Status, "warehouseId": task.WarehouseID, "assignedOperatorId": task.OperatorID, "version": task.Version, "expectedQuantity": expected, "receivedQuantity": received, "remainingQuantity": expected - received, "quantityPolicy": task.Policy, "conditionPolicy": task.Policy.ConditionPolicy, "lines": lines, "updatedAt": task.UpdatedAt, "asOf": task.UpdatedAt}
+	return map[string]any{"taskId": task.ID, "orderId": task.OrderID, "purchaseOrderId": task.LPNCode, "lpnCode": task.LPNCode, "poNumber": task.LPNCode, "supplier": task.Supplier, "status": task.Status, "warehouseId": task.WarehouseID, "assignedOperatorId": task.OperatorID, "version": task.Version, "expectedQuantity": expected, "receivedQuantity": received, "remainingQuantity": expected - received, "quantityPolicy": task.Policy, "conditionPolicy": task.Policy.ConditionPolicy, "lines": lines, "updatedAt": task.UpdatedAt, "asOf": task.UpdatedAt}
 }
 func (r *Router) receivingCommandStatus(w http.ResponseWriter, req *http.Request) {
 	id, err := uuid.Parse(chi.URLParam(req, "commandId"))
@@ -1202,7 +1216,7 @@ func writeError(w http.ResponseWriter, err error, correlationID string) {
 		status = http.StatusConflict
 	case "TASK_NOT_FOUND", "INVENTORY_NOT_FOUND", "SHIPMENT_NOT_FOUND", "COMMAND_NOT_FOUND", "RECEIPT_NOT_FOUND", "UPSTREAM_NOT_FOUND":
 		status = http.StatusNotFound
-	case "BARCODE_UNKNOWN", "BARCODE_WRONG_CONTEXT", "QUANTITY_EXCEEDS_ALLOWED", "REMARK_REQUIRED", "CONDITION_INVALID", "RECEIVING_TASK_INCOMPLETE", "TASK_NOT_ASSIGNED", "TASK_ALREADY_COMPLETED", "SOURCE_LOCATION_INVALID", "DESTINATION_LOCATION_INVALID", "ITEM_INVALID", "VALIDATION_SEQUENCE_INVALID", "INSUFFICIENT_STOCK", "LOCATION_CAPACITY_EXCEEDED", "TASK_INCOMPLETE", "SOURCE_EQUALS_DESTINATION", "SHIPMENT_NOT_READY", "PACKAGE_INCOMPLETE", "CARRIER_INVALID", "TRACKING_INVALID", "SHIPMENT_ALREADY_CONFIRMED", "COUNT_VARIANCE_REQUIRES_REVIEW", "ITEM_NOT_IN_DOCUMENT", "LOCATION_INVALID", "RECEIPT_LINE_MISMATCH", "RECEIPT_QUANTITY_INVALID", "RECEIPT_BATCH_LINE_INVALID", "RECEIPT_BATCH_LINES_INCOMPLETE", "RECEIPT_BATCH_DUPLICATE_LINE", "RECEIPT_LOT_DIMENSION_MISMATCH", "RECEIPT_LINE_FAILED_FINAL", "INVALID_INVENTORY_REQUEST":
+	case "BARCODE_UNKNOWN", "BARCODE_WRONG_CONTEXT", "QUANTITY_EXCEEDS_ALLOWED", "REMARK_REQUIRED", "CONDITION_INVALID", "RECEIVING_TASK_INCOMPLETE", "TASK_NOT_ASSIGNED", "TASK_ALREADY_COMPLETED", "SOURCE_LOCATION_INVALID", "DESTINATION_LOCATION_INVALID", "ITEM_INVALID", "VALIDATION_SEQUENCE_INVALID", "SCAN_MISMATCH", "INSUFFICIENT_STOCK", "LOCATION_CAPACITY_EXCEEDED", "TASK_INCOMPLETE", "PUTAWAY_GROUP_INCOMPLETE", "SOURCE_EQUALS_DESTINATION", "SHIPMENT_NOT_READY", "PACKAGE_INCOMPLETE", "CARRIER_INVALID", "TRACKING_INVALID", "SHIPMENT_ALREADY_CONFIRMED", "COUNT_VARIANCE_REQUIRES_REVIEW", "ITEM_NOT_IN_DOCUMENT", "LOCATION_INVALID", "RECEIPT_LINE_MISMATCH", "RECEIPT_QUANTITY_INVALID", "RECEIPT_BATCH_LINE_INVALID", "RECEIPT_BATCH_LINES_INCOMPLETE", "RECEIPT_BATCH_DUPLICATE_LINE", "RECEIPT_LOT_DIMENSION_MISMATCH", "RECEIPT_LINE_FAILED_FINAL", "INVALID_INVENTORY_REQUEST":
 		status = http.StatusUnprocessableEntity
 	case "RECEIPT_VERSION_REQUIRED":
 		status = http.StatusBadRequest

@@ -31,12 +31,21 @@ func NewTaskAdapter(client *Client, receiving ...*ReceivingAdapter) *TaskAdapter
 func (a *TaskAdapter) List(ctx context.Context, filter executionports.TaskFilter, actor platform.ActorContext) (executionports.TaskPage, error) {
 	items := make([]executiondomain.Task, 0)
 	if filter.Category == "" || !strings.EqualFold(filter.Category, string(executiondomain.CategoryReceiving)) {
-		rows, err := a.client.ListExecutionTasks(ctx, actor.WarehouseID, actor.OperatorID, filter.Category, filter.Status, filter.Query, filter.Limit)
+		// Fetch the warehouse queue without an operator filter so CREATED
+		// Putaway work remains claimable. Filter ownership here: an unassigned
+		// task is visible, while a task owned by another operator is not.
+		rows, err := a.client.ListExecutionTasks(ctx, actor.WarehouseID, "", filter.Category, filter.Status, filter.Query, filter.Limit)
 		if err != nil && filter.Category != "" {
 			return executionports.TaskPage{}, err
 		}
 		if err == nil {
 			for _, row := range rows {
+				if row.AssignedOperatorID != nil && *row.AssignedOperatorID != actor.OperatorID {
+					continue
+				}
+				if strings.EqualFold(row.TaskType, string(executiondomain.CategoryPicking)) && row.AssignedOperatorID == nil {
+					continue
+				}
 				items = append(items, mapExecutionTask(row))
 			}
 		}
@@ -122,8 +131,8 @@ func mapReceivingTask(row receivingdomain.Task) executiondomain.Task {
 		})
 	}
 	return executiondomain.Task{
-		ID: row.ID, Category: executiondomain.CategoryReceiving, Status: executiondomain.TaskStatus(row.Status),
-		Title: row.PONumber, PurchaseOrderID: row.PONumber, Supplier: row.Supplier, ReceivingLines: lines,
+		ID: row.ID, Category: executiondomain.CategoryReceiving, Status: executiondomain.TaskStatus(row.Status), LPNCode: row.LPNCode,
+		Title: row.LPNCode, PurchaseOrderID: row.LPNCode, Supplier: row.Supplier, ReceivingLines: lines,
 		WarehouseID: row.WarehouseID, OperatorID: row.OperatorID,
 		LineCount: len(row.Lines), PieceCount: pieceCount,
 		Version: row.Version, CreatedAt: row.UpdatedAt, UpdatedAt: row.UpdatedAt,

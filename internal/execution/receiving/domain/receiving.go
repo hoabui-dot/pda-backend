@@ -50,11 +50,13 @@ type Line struct {
 	RemainingQuantity  int64  `json:"remainingQuantity"`
 	LotRequired        bool   `json:"lotRequired"`
 	SerialRequired     bool   `json:"serialRequired"`
+	ReceiptVerified    bool   `json:"receiptVerified,omitempty"`
 }
 type Task struct {
 	ID                   string    `json:"id"`
 	OrderID              string    `json:"orderId"`
 	PONumber             string    `json:"poNumber"`
+	LPNCode              string    `json:"lpnCode,omitempty"`
 	Supplier             string    `json:"supplier"`
 	SourceType           string    `json:"sourceType,omitempty"`
 	SourceSystem         string    `json:"sourceSystem,omitempty"`

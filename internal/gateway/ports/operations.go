@@ -42,10 +42,12 @@ type PutawayOperations interface {
 	Start(context.Context, movementapp.Command) (movementdomain.Task, error)
 	Suggestions(context.Context, string, platform.ActorContext) ([]movementdomain.Location, error)
 	ValidateSource(context.Context, movementapp.Command, string) (movementdomain.Task, error)
+	ValidateLPN(context.Context, movementapp.Command, string) (movementdomain.Task, error)
 	ValidateItem(context.Context, movementapp.Command, string) (movementdomain.Task, error)
 	ValidateLot(context.Context, movementapp.Command, string) (movementdomain.Task, error)
 	ValidateDestination(context.Context, movementapp.Command, string) (movementdomain.Task, error)
 	Confirm(context.Context, movementapp.Command, int64) (movementdomain.Task, error)
+	ConfirmGroup(context.Context, movementapp.Command) (movementdomain.Task, error)
 }
 
 type PickingOperations interface {
@@ -116,6 +118,13 @@ type ReceivingOperations interface {
 // Existing local adapters remain compatible through ReceivingOperations.
 type ReceivingBarcodeOperations interface {
 	ResolveBarcodeWithSymbology(context.Context, string, string, string, platform.ActorContext) (receivingdomain.Line, error)
+}
+
+// ReceivingScanContextOperations preserves the business scan context for
+// production adapters. LPN scans identify the receipt and must not be sent to
+// the item barcode resolver.
+type ReceivingScanContextOperations interface {
+	ResolveBarcodeWithContext(context.Context, string, string, string, string, platform.ActorContext) (receivingdomain.Line, error)
 }
 
 // ReceivingBatchOperations is the one-Receipt submit boundary used by the

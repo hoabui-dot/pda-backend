@@ -136,6 +136,12 @@ func (s *PutawayService) Suggestions(c context.Context, id string, a platform.Ac
 func (s *PutawayService) ValidateSource(c context.Context, x Command, v string) (domain.Task, error) {
 	return mutate(c, s.d, domain.Putaway, x, "PutawayTaskStarted", func(t *domain.Task) error { return t.ValidateSource(x.Actor.OperatorID, v, x.BaseVersion, s.d.now()) }, 0)
 }
+
+// ValidateLPN is implemented by the local adapter for interface parity. The
+// production WMS adapter forwards this scan as LPN to Warehouse Execution.
+func (s *PutawayService) ValidateLPN(c context.Context, x Command, v string) (domain.Task, error) {
+	return mutate(c, s.d, domain.Putaway, x, "PutawayLPNValidated", func(t *domain.Task) error { return t.ValidateSource(x.Actor.OperatorID, v, x.BaseVersion, s.d.now()) }, 0)
+}
 func (s *PutawayService) ValidateItem(c context.Context, x Command, v string) (domain.Task, error) {
 	return mutate(c, s.d, domain.Putaway, x, "PutawayItemValidated", func(t *domain.Task) error { return t.ValidateItem(x.Actor.OperatorID, v, x.BaseVersion, s.d.now()) }, 0)
 }
@@ -149,6 +155,20 @@ func (s *PutawayService) ValidateDestination(c context.Context, x Command, v str
 }
 func (s *PutawayService) Confirm(c context.Context, x Command, q int64) (domain.Task, error) {
 	return mutate(c, s.d, domain.Putaway, x, "InventoryMoved", func(t *domain.Task) error { return t.Move(x.Actor.OperatorID, q, x.BaseVersion, s.d.now()) }, q)
+}
+
+// ConfirmGroup closes a grouped putaway after every exact line has already
+// produced its own inventory movement. It deliberately performs no movement.
+func (s *PutawayService) ConfirmGroup(c context.Context, x Command) (domain.Task, error) {
+	return mutate(c, s.d, domain.Putaway, x, "PutawayGroupCompleted", func(t *domain.Task) error {
+		if t.Status != domain.PartiallyCompleted {
+			return &platform.DomainError{Code: "TASK_INCOMPLETE", SafeMessage: "All putaway lines must be completed first"}
+		}
+		t.Status = domain.Completed
+		t.Version++
+		t.UpdatedAt = s.d.now().UTC()
+		return nil
+	}, 0)
 }
 func (s *PickingService) ValidateLocation(c context.Context, x Command, v string) (domain.Task, error) {
 	return mutate(c, s.d, domain.Picking, x, "PickingTaskStarted", func(t *domain.Task) error { return t.ValidateSource(x.Actor.OperatorID, v, x.BaseVersion, s.d.now()) }, 0)

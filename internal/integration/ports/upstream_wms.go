@@ -33,6 +33,7 @@ type InboundAdapter interface {
 type Location struct {
 	ID            string `json:"location_id"`
 	Code          string `json:"location_code"`
+	Name          string `json:"location_name,omitempty"`
 	WarehouseID   string `json:"warehouse_id"`
 	WarehouseCode string `json:"warehouse_code"`
 }
@@ -49,6 +50,7 @@ type ReceiptQuery struct {
 type ReceiptSummary struct {
 	ReceiptID            string        `json:"receipt_id"`
 	ReceiptCode          string        `json:"receipt_code"`
+	LPNCode              string        `json:"lpn_code"`
 	WarehouseLocationID  string        `json:"warehouse_location_id"`
 	Status               string        `json:"status"`
 	ConfirmationStatus   string        `json:"confirmation_status"`
@@ -72,6 +74,7 @@ type ReceiptSummary struct {
 type Receipt struct {
 	ReceiptID            string        `json:"receipt_id"`
 	ReceiptCode          string        `json:"receipt_code"`
+	LPNCode              string        `json:"lpn_code"`
 	WarehouseLocationID  string        `json:"warehouse_location_id"`
 	Status               string        `json:"status"`
 	ConfirmationStatus   string        `json:"confirmation_status"`

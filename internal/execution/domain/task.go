@@ -50,6 +50,7 @@ type Task struct {
 	CreatedAt       time.Time               `json:"createdAt"`
 	UpdatedAt       time.Time               `json:"updatedAt"`
 	PurchaseOrderID string                  `json:"purchaseOrderId,omitempty"`
+	LPNCode         string                  `json:"lpnCode,omitempty"`
 	Supplier        string                  `json:"supplier,omitempty"`
 	ReceivingLines  []ReceivingLineSnapshot `json:"lines,omitempty"`
 }

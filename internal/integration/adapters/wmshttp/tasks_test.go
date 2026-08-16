@@ -48,6 +48,17 @@ func TestMapReceiptTaskPreservesAuthoritativeItemName(t *testing.T) {
 	}
 }
 
+func TestMapReceiptTaskUsesLPNAsReceivingIdentity(t *testing.T) {
+	task := mapReceiptTask(ports.Receipt{
+		ReceiptID: "receipt-1", ReceiptCode: "RCV-001", LPNCode: "LPN-IN-001",
+		WarehouseLocationID: "location-1",
+	}, "warehouse-1")
+
+	if task.LPNCode != "LPN-IN-001" || task.PONumber != "LPN-IN-001" {
+		t.Fatalf("receiving identity = %+v, want LPN-IN-001", task)
+	}
+}
+
 func TestMapReceiptTaskPreservesProductionSourceWithoutFakePurchaseOrder(t *testing.T) {
 	task := mapReceiptTask(ports.Receipt{
 		ReceiptID: "receipt-fg", ReceiptCode: "RCV-FG-001", WarehouseLocationID: "location-1",
@@ -61,5 +72,172 @@ func TestMapReceiptTaskPreservesProductionSourceWithoutFakePurchaseOrder(t *test
 	}
 	if task.Supplier != "" || task.PONumber != "RCV-FG-001" {
 		t.Fatalf("production receipt must not be presented as a fake PO: %+v", task)
+	}
+}
+
+func TestMapMovementTaskUsesLPNFlowForInboundReceipt(t *testing.T) {
+	task := mapMovementTask(executionTask{
+		TaskID:      "putaway-1",
+		TaskType:    "PUTAWAY",
+		Status:      "CREATED",
+		WarehouseID: "warehouse-1",
+		Details: map[string]any{
+			"source_type": "INBOUND_RECEIPT",
+			"lpn_code":    "LPN-IN-001",
+			"lot_code":    "LOT-001",
+			"qty":         float64(10),
+		},
+	}, "PUTAWAY")
+
+	want := []string{"LPN", "DESTINATION"}
+	if len(task.ScanRequirements) != len(want) {
+		t.Fatalf("scan requirements = %v, want %v", task.ScanRequirements, want)
+	}
+	for i := range want {
+		if task.ScanRequirements[i] != want[i] {
+			t.Fatalf("scan requirements = %v, want %v", task.ScanRequirements, want)
+		}
+	}
+}
+
+func TestMapMovementTaskUsesLPNLotFlowForGroupedInboundReceipt(t *testing.T) {
+	task := mapMovementTask(executionTask{
+		TaskID: "putaway-group-1", TaskType: "PUTAWAY", Status: "PARTIALLY_COMPLETED", WarehouseID: "warehouse-1",
+		Details: map[string]any{
+			"source_type": "INBOUND_RECEIPT", "lpn_code": "LPN-IN-001",
+			"lines": []any{map[string]any{"line_id": "line-1", "lot_code": "LOT-001", "qty": float64(10)}},
+		},
+	}, "PUTAWAY")
+	want := []string{"LPN", "LOT", "DESTINATION"}
+	if len(task.ScanRequirements) != len(want) {
+		t.Fatalf("scan requirements = %v, want %v", task.ScanRequirements, want)
+	}
+	for i := range want {
+		if task.ScanRequirements[i] != want[i] {
+			t.Fatalf("scan requirements = %v, want %v", task.ScanRequirements, want)
+		}
+	}
+}
+
+func TestMapMovementTaskNormalizesLegacyRelatedTasks(t *testing.T) {
+	task := mapMovementTask(executionTask{
+		TaskID: "putaway-group-legacy", TaskType: "PUTAWAY", Status: "CREATED", WarehouseID: "warehouse-1",
+		Details: map[string]any{
+			"source_type":   "INBOUND_RECEIPT",
+			"related_tasks": []any{map[string]any{"task_id": "line-1", "details": map[string]any{"lot_code": "LOT-001", "qty": float64(5)}}},
+		},
+	}, "PUTAWAY")
+	if len(task.RelatedTasks) != 1 || task.RelatedTasks[0].Lot != "LOT-001" {
+		t.Fatalf("related tasks = %+v, want one normalized line", task.RelatedTasks)
+	}
+}
+
+func TestMapMovementTaskRestoresGroupedLPNValidationFromRelatedLine(t *testing.T) {
+	task := mapMovementTask(executionTask{
+		TaskID: "putaway-group-reopen", TaskType: "PUTAWAY", Status: "NEW", WarehouseID: "warehouse-1",
+		Details: map[string]any{
+			"source_type": "INBOUND_RECEIPT",
+			"lpn_code":    "LPN-IN-001",
+			"related_tasks": []any{
+				map[string]any{"task_id": "line-1", "details": map[string]any{
+					"line_id": "line-1", "lot_code": "LOT-001", "qty": float64(5),
+					"scan_state": map[string]any{"LPN": true},
+				}},
+			},
+		},
+	}, "PUTAWAY")
+
+	if !task.LPNValidated {
+		t.Fatalf("LPN validation was lost when reopening grouped task: %+v", task)
+	}
+	if len(task.RelatedTasks) != 1 {
+		t.Fatalf("related tasks = %+v, want one line", task.RelatedTasks)
+	}
+}
+
+func TestMapMovementTaskPreservesGroupedPutawayLineIdentityAndState(t *testing.T) {
+	task := mapMovementTask(executionTask{
+		TaskID: "putaway-group-1", TaskType: "PUTAWAY", Status: "PARTIALLY_COMPLETED", WarehouseID: "warehouse-1",
+		Details: map[string]any{
+			"source_type": "INBOUND_RECEIPT",
+			"lines": []any{
+				map[string]any{
+					"line_id": "line-1", "status": "COMPLETED", "completed_qty": float64(12), "qty": float64(12),
+					"item_revision_id": "item-1", "lot_code": "LOT-1", "source_location_id": "receiving-1",
+				},
+				map[string]any{
+					"line_id": "line-2", "status": "PENDING", "completed_qty": float64(0), "qty": float64(8),
+					"item_revision_id": "item-2", "lot_code": "LOT-2", "source_location_id": "receiving-1",
+				},
+			},
+		},
+	}, "PUTAWAY")
+
+	if len(task.RelatedTasks) != 2 {
+		t.Fatalf("related tasks = %+v, want two line tasks", task.RelatedTasks)
+	}
+	completed, pending := task.RelatedTasks[0], task.RelatedTasks[1]
+	if completed.ID != "line-1" || completed.LineID != "line-1" || completed.ParentTaskID != "putaway-group-1" {
+		t.Fatalf("completed line identity = %+v", completed)
+	}
+	if completed.Status != "COMPLETED" || completed.CompletedQuantity != 12 {
+		t.Fatalf("completed line state = %+v", completed)
+	}
+	if pending.ID != "line-2" || pending.LineID != "line-2" || pending.ParentTaskID != "putaway-group-1" {
+		t.Fatalf("pending line identity = %+v", pending)
+	}
+	if pending.Status != "NEW" || pending.CompletedQuantity != 0 {
+		t.Fatalf("pending line state = %+v, want NEW/0", pending)
+	}
+}
+
+func TestMapMovementTaskCarriesActiveLocationGroup(t *testing.T) {
+	task := mapMovementTask(executionTask{
+		TaskID: "putaway-group-active", TaskType: "PUTAWAY", Status: "PARTIALLY_COMPLETED", WarehouseID: "warehouse-1",
+		Details: map[string]any{
+			"source_type":     "INBOUND_RECEIPT",
+			"active_line_ids": []any{"line-1", "line-2"},
+			"active_line_id":  "line-1",
+			"lines": []any{
+				map[string]any{"line_id": "line-1", "status": "PENDING", "qty": float64(5), "destination_location_id": "loc-1"},
+				map[string]any{"line_id": "line-2", "status": "PENDING", "qty": float64(7), "destination_location_id": "loc-1"},
+			},
+		},
+	}, "PUTAWAY")
+
+	if len(task.ActiveLineIDs) != 2 || task.ActiveLineIDs[0] != "line-1" || task.ActiveLineIDs[1] != "line-2" {
+		t.Fatalf("active line ids = %v, want [line-1 line-2]", task.ActiveLineIDs)
+	}
+	if len(task.RelatedTasks) != 2 {
+		t.Fatalf("related tasks = %+v, want two lines", task.RelatedTasks)
+	}
+	if task.ID != "putaway-group-active" {
+		t.Fatalf("group task identity = %q, want parent task ID", task.ID)
+	}
+	if task.ParentTaskID != "" {
+		t.Fatalf("group task must not have a parent task ID: %q", task.ParentTaskID)
+	}
+}
+
+func TestMapMovementTaskUsesLotFlowForNonInboundPutaway(t *testing.T) {
+	task := mapMovementTask(executionTask{
+		TaskID:      "putaway-2",
+		TaskType:    "PUTAWAY",
+		Status:      "CREATED",
+		WarehouseID: "warehouse-1",
+		Details: map[string]any{
+			"source_type": "INVENTORY_TRANSFER",
+			"lot_code":    "LOT-001",
+		},
+	}, "PUTAWAY")
+
+	want := []string{"SOURCE", "ITEM", "LOT", "DESTINATION"}
+	if len(task.ScanRequirements) != len(want) {
+		t.Fatalf("scan requirements = %v, want %v", task.ScanRequirements, want)
+	}
+	for i := range want {
+		if task.ScanRequirements[i] != want[i] {
+			t.Fatalf("scan requirements = %v, want %v", task.ScanRequirements, want)
+		}
 	}
 }

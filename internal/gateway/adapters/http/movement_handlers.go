@@ -49,7 +49,7 @@ func movementValue(q *http.Request) (string, error) {
 	if err := validateMovementMirrors(q, x.TaskID, x.CommandID, x.IdempotencyKey, x.BaseVersion); err != nil {
 		return "", err
 	}
-	if x.ScanContext != "" && x.ScanContext != "PUTAWAY_SOURCE" && x.ScanContext != "PUTAWAY_ITEM" && x.ScanContext != "PUTAWAY_LOT" && x.ScanContext != "PUTAWAY_DESTINATION" && x.ScanContext != "PICKING_LOCATION" && x.ScanContext != "PICKING_ITEM" && x.ScanContext != "PICKING_LOT" && x.ScanContext != "PICKING_DESTINATION" && x.ScanContext != "REPLENISHMENT_SOURCE" && x.ScanContext != "REPLENISHMENT_ITEM" && x.ScanContext != "REPLENISHMENT_DESTINATION" {
+	if x.ScanContext != "" && x.ScanContext != "PUTAWAY_LPN" && x.ScanContext != "PUTAWAY_SOURCE" && x.ScanContext != "PUTAWAY_ITEM" && x.ScanContext != "PUTAWAY_LOT" && x.ScanContext != "PUTAWAY_DESTINATION" && x.ScanContext != "PICKING_LOCATION" && x.ScanContext != "PICKING_ITEM" && x.ScanContext != "PICKING_LOT" && x.ScanContext != "PICKING_DESTINATION" && x.ScanContext != "REPLENISHMENT_SOURCE" && x.ScanContext != "REPLENISHMENT_ITEM" && x.ScanContext != "REPLENISHMENT_DESTINATION" {
 		return "", &platform.DomainError{Code: "BARCODE_WRONG_CONTEXT", SafeMessage: "Scanner context is invalid"}
 	}
 	if x.NormalizedValue != "" {
@@ -117,8 +117,14 @@ func validateMovementMirrors(q *http.Request, taskID string, commandID uuid.UUID
 		return &platform.DomainError{Code: "INVALID_REQUEST", SafeMessage: "Idempotency key does not match the header"}
 	}
 	headerID, _ := uuid.Parse(headerKey)
-	if commandID != uuid.Nil && commandID != headerID {
-		return &platform.DomainError{Code: "INVALID_REQUEST", SafeMessage: "Command ID does not match the idempotency header"}
+	// Command ID and Idempotency-Key have different responsibilities. The
+	// command ID is the business/audit correlation identity; the header key is
+	// the replay identity. PDA_APP legitimately sends both values separately.
+	// The gateway uses the header key as the command identity for legacy
+	// movement routes, but must not reject a valid request merely because the
+	// two UUIDs differ.
+	if commandID != uuid.Nil && headerID == uuid.Nil {
+		return &platform.DomainError{Code: "INVALID_REQUEST", SafeMessage: "A UUID Idempotency-Key is required"}
 	}
 	if version != 0 {
 		headerVersion, err := strconv.ParseInt(strings.Trim(q.Header.Get("If-Match"), `"`), 10, 64)
@@ -139,19 +145,33 @@ func movementView(task movementdomain.Task) map[string]any {
 	view["sourceBalance"] = nil
 	view["destinationBalance"] = nil
 	next := "CONFIRM_QUANTITY"
-	if !task.SourceValidated {
+	needsLPN := movementRequires(task, "LPN")
+	needsItem := movementRequires(task, "ITEM")
+	needsLot := movementRequires(task, "LOT") || task.Lot != ""
+	if needsLPN && !task.LPNValidated {
+		next = "VALIDATE_LPN"
+	} else if movementRequires(task, "SOURCE") && !task.SourceValidated {
 		next = "VALIDATE_SOURCE"
-	} else if !task.ItemValidated {
+	} else if needsItem && !task.ItemValidated {
 		next = "VALIDATE_ITEM"
-	} else if task.Lot != "" && !task.LotValidated {
+	} else if needsLot && !task.LotValidated {
 		next = "VALIDATE_LOT"
-	} else if !task.DestinationValidated {
+	} else if movementRequires(task, "DESTINATION") && !task.DestinationValidated {
 		next = "VALIDATE_DESTINATION"
 	} else if task.Status == movementdomain.Completed {
 		next = "COMPLETED"
 	}
 	view["nextStep"] = next
 	return view
+}
+
+func movementRequires(task movementdomain.Task, required string) bool {
+	for _, value := range task.ScanRequirements {
+		if strings.EqualFold(value, required) {
+			return true
+		}
+	}
+	return false
 }
 
 func maxInt64(value, minimum int64) int64 {
@@ -223,6 +243,11 @@ func (r *Router) putawaySource(w http.ResponseWriter, q *http.Request) {
 		return r.putaway.ValidateSource(q.Context(), c, v)
 	})
 }
+func (r *Router) putawayLPN(w http.ResponseWriter, q *http.Request) {
+	r.movementValidation(w, q, func(c movementapp.Command, v string) (movementdomain.Task, error) {
+		return r.putaway.ValidateLPN(q.Context(), c, v)
+	})
+}
 func (r *Router) putawayItem(w http.ResponseWriter, q *http.Request) {
 	r.movementValidation(w, q, func(c movementapp.Command, v string) (movementdomain.Task, error) {
 		return r.putaway.ValidateItem(q.Context(), c, v)
@@ -242,6 +267,15 @@ func (r *Router) putawayConfirm(w http.ResponseWriter, q *http.Request) {
 	r.movementConfirm(w, q, func(c movementapp.Command, v int64) (movementdomain.Task, error) {
 		return r.putaway.Confirm(q.Context(), c, v)
 	})
+}
+func (r *Router) putawayGroupConfirm(w http.ResponseWriter, q *http.Request) {
+	c, err := r.movementCommand(q)
+	if err != nil {
+		r.movementResponse(w, q, nil, err)
+		return
+	}
+	v, err := r.putaway.ConfirmGroup(q.Context(), c)
+	r.movementResponse(w, q, v, err)
 }
 func (r *Router) pickingList(w http.ResponseWriter, q *http.Request) {
 	v, e := r.picking.List(q.Context(), r.actor(q))

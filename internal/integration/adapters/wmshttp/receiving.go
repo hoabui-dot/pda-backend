@@ -71,7 +71,7 @@ func (a *ReceivingAdapter) List(ctx context.Context, f receivingports.Filter, ac
 		// detail fallback for that contract shape.
 		if len(row.Lines) > 0 {
 			items = append(items, mapReceiptTask(ports.Receipt{
-				ReceiptID: row.ReceiptID, ReceiptCode: row.ReceiptCode,
+				ReceiptID: row.ReceiptID, ReceiptCode: row.ReceiptCode, LPNCode: row.LPNCode,
 				WarehouseLocationID: row.WarehouseLocationID, Status: row.Status,
 				ConfirmationStatus: row.ConfirmationStatus, AssignedOperatorID: row.AssignedOperatorID,
 				AssignmentStatus: row.AssignmentStatus, AssignmentVersion: row.AssignmentVersion,
@@ -124,7 +124,11 @@ func mapReceiptTask(receipt ports.Receipt, warehouseID string) receivingdomain.T
 	if receipt.SourceType == "PRODUCTION_FINISHED_GOODS" && receipt.SourceWOCode != "" {
 		documentCode = receipt.SourceWOCode
 	}
-	task := receivingdomain.Task{ID: receipt.ReceiptID, OrderID: receipt.ReceiptID, PONumber: receipt.ReceiptCode, Supplier: "", WarehouseID: warehouseID,
+	lpnCode := receipt.LPNCode
+	if lpnCode == "" {
+		lpnCode = receipt.ReceiptCode
+	}
+	task := receivingdomain.Task{ID: receipt.ReceiptID, OrderID: receipt.ReceiptID, PONumber: lpnCode, LPNCode: lpnCode, Supplier: "", WarehouseID: warehouseID,
 		SourceType: receipt.SourceType, SourceSystem: receipt.SourceSystem, SourceDocumentType: receipt.SourceDocumentType,
 		SourceDocumentID: receipt.SourceRequestID, SourceDocumentCode: documentCode, WorkOrderID: receipt.SourceWOID, WorkOrderCode: receipt.SourceWOCode,
 		ProductionOutputID: receipt.SourceOutputID, ReceiptRequestID: receipt.SourceRequestID, SourceConfirmationID: receipt.SourceConfirmationID,
@@ -171,17 +175,39 @@ func (a *ReceivingAdapter) Claim(ctx context.Context, command receivingapp.Comma
 }
 
 func (a *ReceivingAdapter) ResolveBarcode(ctx context.Context, taskID, barcode string, actor platform.ActorContext) (receivingdomain.Line, error) {
-	return a.resolveBarcode(ctx, taskID, barcode, "UNKNOWN", actor)
+	return a.resolveBarcode(ctx, taskID, barcode, "UNKNOWN", "RECEIVING_ITEM", actor)
 }
 
 func (a *ReceivingAdapter) ResolveBarcodeWithSymbology(ctx context.Context, taskID, barcode, symbology string, actor platform.ActorContext) (receivingdomain.Line, error) {
-	return a.resolveBarcode(ctx, taskID, barcode, symbology, actor)
+	return a.resolveBarcode(ctx, taskID, barcode, symbology, "RECEIVING_ITEM", actor)
 }
 
-func (a *ReceivingAdapter) resolveBarcode(ctx context.Context, taskID, barcode, symbology string, actor platform.ActorContext) (receivingdomain.Line, error) {
+func (a *ReceivingAdapter) ResolveBarcodeWithContext(ctx context.Context, taskID, barcode, symbology, scanContext string, actor platform.ActorContext) (receivingdomain.Line, error) {
+	return a.resolveBarcode(ctx, taskID, barcode, symbology, scanContext, actor)
+}
+
+func (a *ReceivingAdapter) resolveBarcode(ctx context.Context, taskID, barcode, symbology, scanContext string, actor platform.ActorContext) (receivingdomain.Line, error) {
 	task, err := a.Detail(ctx, taskID, actor)
 	if err != nil {
 		return receivingdomain.Line{}, err
+	}
+	// LPN is the receipt identity. Resolve it against the authoritative task
+	// snapshot before attempting item/lot barcode resolution so the PDA does
+	// not send a receipt LPN through the item alias resolver.
+	if task.LPNCode != "" && strings.EqualFold(strings.TrimSpace(task.LPNCode), strings.TrimSpace(barcode)) {
+		for _, line := range task.Lines {
+			if line.ExpectedQuantity > line.ReceivedQuantity {
+				line.ReceiptVerified = true
+				return line, nil
+			}
+		}
+		return receivingdomain.Line{}, receivingdomain.ErrAlreadyCompleted
+	}
+	if strings.EqualFold(scanContext, "RECEIVING_LPN") {
+		// The context is a client hint, not a reason to reject a normal item
+		// scan. LPN equality was checked above; falling through lets older
+		// clients and the first scan in a receiving session continue through
+		// the authoritative item resolver.
 	}
 	for _, line := range task.Lines {
 		// A receipt may contain multiple lines for the same item revision but

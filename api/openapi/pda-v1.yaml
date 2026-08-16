@@ -227,6 +227,19 @@ paths:
     get: {operationId: listPickingTasks, security: [{bearerAuth: []}], responses: {'200': {description: Picking tasks}}}
   /picking/tasks/{taskId}:
     get: {operationId: pickingDetail, security: [{bearerAuth: []}], parameters: [{name: taskId, in: path, required: true, schema: {type: string}}], responses: {'200': {description: Picking task and current line}}}
+  /picking/tasks/{taskId}/claim:
+    post:
+      operationId: claimPickingTask
+      security: [{bearerAuth: []}]
+      parameters:
+        - {name: taskId, in: path, required: true, schema: {type: string}}
+        - {$ref: '#/components/parameters/DeviceId'}
+        - {$ref: '#/components/parameters/WarehouseId'}
+        - {$ref: '#/components/parameters/IdempotencyKey'}
+        - {$ref: '#/components/parameters/IfMatch'}
+      responses:
+        '200': {description: Picking task claimed or prior idempotent result}
+        '409': {description: Task assignment or version conflict}
   /picking/tasks/{taskId}/location-validations:
     post: {$ref: '#/components/x-movementValidation'}
   /picking/tasks/{taskId}/barcode-resolutions:

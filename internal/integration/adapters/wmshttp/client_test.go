@@ -110,7 +110,7 @@ func TestReceivingAndLocationAdaptersMapOwnerContracts(t *testing.T) {
 			return
 		}
 		if r.URL.Path == locationPath+"/loc-1" && r.Method == http.MethodGet {
-			_, _ = w.Write([]byte(`{"location_id":"loc-1","location_code":"RECV-01","warehouse_id":"wh-1","warehouse_code":"MAIN"}`))
+			_, _ = w.Write([]byte(`{"location_id":"loc-1","location_code":"RECV-01","location_name":{"vi":"Khu chờ nhập","en":"Receiving staging"},"warehouse_id":"wh-1","warehouse_code":"MAIN"}`))
 			return
 		}
 		if r.URL.Path == inboundReceiptsPath+"/r-1/confirm" && r.Method == http.MethodPost {
@@ -139,7 +139,7 @@ func TestReceivingAndLocationAdaptersMapOwnerContracts(t *testing.T) {
 		t.Fatalf("receipts=%+v err=%v", receipts, err)
 	}
 	location, err := client.Location(context.Background(), "loc-1")
-	if err != nil || location.WarehouseID != "wh-1" || location.WarehouseCode != "MAIN" {
+	if err != nil || location.WarehouseID != "wh-1" || location.WarehouseCode != "MAIN" || location.Name != "Khu chờ nhập" {
 		t.Fatalf("location=%+v err=%v", location, err)
 	}
 	confirmed, err := client.ConfirmReceipt(context.Background(), "r-1", "confirm-1")
@@ -177,6 +177,24 @@ func TestExecutionOperatorRolePropagatesForScanAndConfirm(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := client.ApplyExecutionTaskCommand(context.Background(), "task-1", executionTaskCommand{CommandID: "command-1", CommandType: "CONFIRM", ExpectedVersion: 1}, "operator-1", "idempotency-1"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestExecutionGroupConfirmUsesHyphenatedOwnerRoute(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != executionTasksPath+"/task-1/confirm-group" {
+			t.Fatalf("path = %q, want confirm-group route", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"task":{"task_id":"task-1","task_type":"PUTAWAY","status":"COMPLETED","warehouse_id":"wh-1","version":9}}`))
+	}))
+	defer server.Close()
+	client, err := New(server.URL, "test-token", server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.ApplyExecutionTaskCommand(context.Background(), "task-1", executionTaskCommand{CommandID: "command-1", CommandType: "CONFIRM_GROUP", ExpectedVersion: 8}, "operator-1", "idempotency-1"); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -233,6 +251,35 @@ func TestReceivingListAcceptsLocalizedItemNameSnapshot(t *testing.T) {
 	}
 	if len(page.Items) != 1 || len(page.Items[0].Lines) != 1 || page.Items[0].Lines[0].ItemName != "Cao su carbon" {
 		t.Fatalf("localized item name was not mapped: %+v", page.Items)
+	}
+}
+
+func TestReceivingBarcodeResolvesLPNBeforeItemResolver(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == inboundReceiptsPath+"/receipt-lpn":
+			_, _ = w.Write([]byte(`{"receipt_id":"receipt-lpn","receipt_code":"RCV-1","lpn_code":"LPN-IN-1","warehouse_location_id":"loc-1","status":"Draft","assignment_status":"CLAIMED","assigned_operator_id":"op-1","assignment_version":1,"lines":[{"line_id":"line-1","item_revision_id":"item-1","lot_code":"LOT-1","expected_quantity":5,"received_quantity":0}]}`))
+		case r.Method == http.MethodGet && r.URL.Path == locationPath+"/loc-1":
+			_, _ = w.Write([]byte(`{"location_id":"loc-1","warehouse_id":"wh-1","warehouse_code":"MAIN"}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	client, err := New(server.URL, "test-token", server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	line, err := NewReceivingAdapter(client).ResolveBarcodeWithContext(
+		context.Background(), "receipt-lpn", "LPN-IN-1", "CODE128", "RECEIVING_LPN",
+		platform.ActorContext{OperatorID: "op-1", WarehouseID: "wh-1"},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !line.ReceiptVerified || line.ID != "line-1" {
+		t.Fatalf("LPN resolution = %+v, want verified line-1", line)
 	}
 }
 

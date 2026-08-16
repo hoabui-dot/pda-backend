@@ -179,10 +179,24 @@ func (c *Client) Warehouses(ctx context.Context) ([]ports.Warehouse, error) {
 }
 
 func (c *Client) Location(ctx context.Context, id string) (ports.Location, error) {
-	var out ports.Location
-	if err := c.getJSON(ctx, locationPath+"/"+url.PathEscape(id), &out); err != nil {
+	var raw struct {
+		ID            string          `json:"location_id"`
+		Code          string          `json:"location_code"`
+		Name          json.RawMessage `json:"location_name"`
+		WarehouseID   string          `json:"warehouse_id"`
+		WarehouseCode string          `json:"warehouse_code"`
+	}
+	if err := c.getJSON(ctx, locationPath+"/"+url.PathEscape(id), &raw); err != nil {
 		return ports.Location{}, err
 	}
+	name := ""
+	if len(raw.Name) > 0 && string(raw.Name) != "null" {
+		parsedName, parseErr := localizedName(raw.Name)
+		if parseErr == nil {
+			name = parsedName
+		}
+	}
+	out := ports.Location{ID: raw.ID, Code: raw.Code, Name: name, WarehouseID: raw.WarehouseID, WarehouseCode: raw.WarehouseCode}
 	if out.ID == "" || out.WarehouseID == "" {
 		return ports.Location{}, fmt.Errorf("WMS location response contains incomplete identity")
 	}
@@ -454,11 +468,15 @@ func (c *Client) ApplyExecutionTaskCommand(ctx context.Context, id string, comma
 	if err != nil {
 		return executionTask{}, fmt.Errorf("encode WMS task command: %w", err)
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+executionTasksPath+"/"+url.PathEscape(id)+"/"+strings.ToLower(command.CommandType), strings.NewReader(string(body)))
+	// Warehouse Execution exposes hyphenated command routes (for example
+	// confirm-group), while the internal command enum uses underscores.
+	routeCommand := strings.ToLower(strings.ReplaceAll(command.CommandType, "_", "-"))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+executionTasksPath+"/"+url.PathEscape(id)+"/"+routeCommand, strings.NewReader(string(body)))
 	if err != nil {
 		return executionTask{}, fmt.Errorf("build WMS task command request: %w", err)
 	}
 	c.applyHeaders(req, idempotencyKey)
+	slog.Info("wms_task_command_request", "taskId", id, "commandId", command.CommandID, "commandType", command.CommandType, "expectedVersion", command.ExpectedVersion, "actorId", actorID, "traceId", command.CorrelationID, "idempotencyKey", idempotencyKey)
 	// PDA Backend acts as the authenticated service, while the operator role
 	// remains explicit for Warehouse Execution authorization.
 	req.Header.Set("X-Role-Code", "WMS_EXECUTION_OPERATOR")
@@ -525,6 +543,7 @@ func (c *Client) RecordExecutionScan(ctx context.Context, id, scanType, value st
 		return fmt.Errorf("build WMS task scan request: %w", err)
 	}
 	c.applyHeaders(req, "")
+	slog.Info("wms_task_scan_request", "taskId", id, "scanType", scanType, "scanValue", value, "expectedVersion", version, "actorId", actorID, "traceId", traceID)
 	// Scan validation is an operator action forwarded by PDA Backend.
 	req.Header.Set("X-Role-Code", "WMS_EXECUTION_OPERATOR")
 	if actorID != "" {
@@ -934,6 +953,9 @@ func ownerResponseError(status int, payload []byte) error {
 		}
 	}
 	message := strings.TrimSpace(body.Message)
+	if message == "" && strings.TrimSpace(body.Error) != "" && !isMachineErrorCode(body.Error) {
+		message = strings.TrimSpace(body.Error)
+	}
 	if message == "" {
 		message = "WMS owner request failed"
 	}

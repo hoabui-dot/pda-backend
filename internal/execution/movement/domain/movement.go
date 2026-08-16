@@ -35,45 +35,58 @@ var (
 )
 
 type Task struct {
-	ID                      string    `json:"id"`
-	Workflow                Workflow  `json:"workflow"`
-	Status                  Status    `json:"status"`
-	WarehouseID             string    `json:"warehouseId"`
-	OperatorID              *string   `json:"operatorId"`
-	Version                 int64     `json:"version"`
-	SourceLocation          string    `json:"sourceLocation"`
-	SourceLocationID        string    `json:"sourceLocationId,omitempty"`
-	SourceLocationCode      string    `json:"sourceLocationCode,omitempty"`
-	SourceBin               string    `json:"sourceBin,omitempty"`
-	SourceBinID             string    `json:"sourceBinId,omitempty"`
-	SourceBinCode           string    `json:"sourceBinCode,omitempty"`
-	DestinationLocation     string    `json:"destinationLocation"`
-	DestinationLocationID   string    `json:"destinationLocationId,omitempty"`
-	DestinationLocationCode string    `json:"destinationLocationCode,omitempty"`
-	DestinationCode         string    `json:"destinationCode,omitempty"`
-	DestinationBinID        string    `json:"destinationBinId,omitempty"`
-	DestinationBinCode      string    `json:"destinationBinCode,omitempty"`
-	ItemID                  string    `json:"itemId"`
-	ItemCode                string    `json:"itemCode,omitempty"`
-	ItemName                string    `json:"itemName,omitempty"`
-	SalesFulfillmentID      string    `json:"salesFulfillmentId,omitempty"`
-	SalesOrderID            string    `json:"salesOrderId,omitempty"`
-	SalesOrderCode          string    `json:"salesOrderCode,omitempty"`
-	MaterialRequestID       string    `json:"materialRequestId,omitempty"`
-	WorkOrderID             string    `json:"workOrderId,omitempty"`
-	WorkOrderCode           string    `json:"workOrderCode,omitempty"`
-	LotID                   string    `json:"lotId,omitempty"`
-	UOMCode                 string    `json:"uomCode,omitempty"`
-	Barcode                 string    `json:"barcode"`
-	Lot                     string    `json:"lot,omitempty"`
-	RequiredQuantity        int64     `json:"requiredQuantity"`
-	CompletedQuantity       int64     `json:"completedQuantity"`
-	SourceValidated         bool      `json:"sourceValidated"`
-	DestinationValidated    bool      `json:"destinationValidated"`
-	ItemValidated           bool      `json:"itemValidated"`
-	LotValidated            bool      `json:"lotValidated"`
-	ScanRequirements        []string  `json:"scanRequirements,omitempty"`
-	UpdatedAt               time.Time `json:"updatedAt"`
+	ID                      string   `json:"id"`
+	ParentTaskID            string   `json:"parentTaskId,omitempty"`
+	LineID                  string   `json:"lineId,omitempty"`
+	Workflow                Workflow `json:"workflow"`
+	Status                  Status   `json:"status"`
+	WarehouseID             string   `json:"warehouseId"`
+	OperatorID              *string  `json:"operatorId"`
+	Version                 int64    `json:"version"`
+	SourceLocation          string   `json:"sourceLocation"`
+	SourceLocationID        string   `json:"sourceLocationId,omitempty"`
+	SourceLocationCode      string   `json:"sourceLocationCode,omitempty"`
+	SourceLocationName      string   `json:"sourceLocationName,omitempty"`
+	SourceBin               string   `json:"sourceBin,omitempty"`
+	SourceBinID             string   `json:"sourceBinId,omitempty"`
+	SourceBinCode           string   `json:"sourceBinCode,omitempty"`
+	DestinationLocation     string   `json:"destinationLocation"`
+	DestinationLocationID   string   `json:"destinationLocationId,omitempty"`
+	DestinationLocationCode string   `json:"destinationLocationCode,omitempty"`
+	DestinationLocationName string   `json:"destinationLocationName,omitempty"`
+	DestinationCode         string   `json:"destinationCode,omitempty"`
+	DestinationBinID        string   `json:"destinationBinId,omitempty"`
+	DestinationBinCode      string   `json:"destinationBinCode,omitempty"`
+	ItemID                  string   `json:"itemId"`
+	ItemCode                string   `json:"itemCode,omitempty"`
+	ItemName                string   `json:"itemName,omitempty"`
+	SalesFulfillmentID      string   `json:"salesFulfillmentId,omitempty"`
+	SalesOrderID            string   `json:"salesOrderId,omitempty"`
+	SalesOrderCode          string   `json:"salesOrderCode,omitempty"`
+	MaterialRequestID       string   `json:"materialRequestId,omitempty"`
+	WorkOrderID             string   `json:"workOrderId,omitempty"`
+	WorkOrderCode           string   `json:"workOrderCode,omitempty"`
+	SourceReceiptID         string   `json:"sourceReceiptId,omitempty"`
+	SourceReceiptCode       string   `json:"sourceReceiptCode,omitempty"`
+	LotID                   string   `json:"lotId,omitempty"`
+	LPNCode                 string   `json:"lpnCode,omitempty"`
+	UOMCode                 string   `json:"uomCode,omitempty"`
+	Barcode                 string   `json:"barcode"`
+	Lot                     string   `json:"lot,omitempty"`
+	RequiredQuantity        int64    `json:"requiredQuantity"`
+	CompletedQuantity       int64    `json:"completedQuantity"`
+	SourceValidated         bool     `json:"sourceValidated"`
+	LPNValidated            bool     `json:"lpnValidated"`
+	DestinationValidated    bool     `json:"destinationValidated"`
+	ItemValidated           bool     `json:"itemValidated"`
+	LotValidated            bool     `json:"lotValidated"`
+	ScanRequirements        []string `json:"scanRequirements,omitempty"`
+	// ActiveLineIDs is returned after a shared destination-location scan. It
+	// identifies every pending receipt line that can be confirmed from that
+	// physical location in the current operator action.
+	ActiveLineIDs []string  `json:"activeLineIds,omitempty"`
+	RelatedTasks  []Task    `json:"relatedTasks,omitempty"`
+	UpdatedAt     time.Time `json:"updatedAt"`
 }
 
 func (t Task) Remaining() int64 { return t.RequiredQuantity - t.CompletedQuantity }
@@ -202,7 +215,7 @@ func (t *Task) Move(operator string, quantity, base int64, now time.Time) error 
 	if err := t.guard(operator, base); err != nil {
 		return err
 	}
-	if !t.SourceValidated || !t.ItemValidated || !t.DestinationValidated || (t.Lot != "" && !t.LotValidated) {
+	if !t.SourceValidated || !t.DestinationValidated || (t.Workflow != Picking && !t.ItemValidated) || (t.Workflow != Picking && t.Lot != "" && !t.LotValidated) {
 		return ErrSequence
 	}
 	if quantity <= 0 || quantity > t.Remaining() {

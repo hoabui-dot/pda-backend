@@ -206,6 +206,9 @@ func (u putawayAdapter) Suggestions(c context.Context, id string, a platform.Act
 func (u putawayAdapter) ValidateSource(c context.Context, x movementapp.Command, v string) (movementdomain.Task, error) {
 	return Unavailable(u).ValidateSource(c, x, v)
 }
+func (u putawayAdapter) ValidateLPN(c context.Context, x movementapp.Command, v string) (movementdomain.Task, error) {
+	return Unavailable(u).ValidateSource(c, x, v)
+}
 func (u putawayAdapter) ValidateItem(c context.Context, x movementapp.Command, v string) (movementdomain.Task, error) {
 	return Unavailable(u).ValidateSource(c, x, v)
 }
@@ -217,6 +220,9 @@ func (u putawayAdapter) ValidateDestination(c context.Context, x movementapp.Com
 }
 func (u putawayAdapter) Confirm(c context.Context, x movementapp.Command, q int64) (movementdomain.Task, error) {
 	return Unavailable(u).MovementConfirm(c, x, q)
+}
+func (u putawayAdapter) ConfirmGroup(c context.Context, x movementapp.Command) (movementdomain.Task, error) {
+	return Unavailable(u).MovementDetail(c, x.TaskID, x.Actor)
 }
 
 type pickingAdapter Unavailable

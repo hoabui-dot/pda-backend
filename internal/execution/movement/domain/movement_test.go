@@ -101,3 +101,26 @@ func TestPutawayLotIsValidatedAfterItemBeforeDestination(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestPickingMoveRequiresSourceAndDestinationOnly(t *testing.T) {
+	p := task(Picking)
+	p.DestinationLocation = "STAGING"
+	now := time.Now()
+	p.OperatorID = ptr("OP")
+	p.Status = InProgress
+	p.Version = 1
+	if err := p.ValidateSource("OP", "SRC", 1, now); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.ValidateDestination("OP", "STAGING", 2, now); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.Move("OP", 6, 3, now); err != nil {
+		t.Fatal(err)
+	}
+	if p.Status != Completed || p.CompletedQuantity != 6 {
+		t.Fatalf("unexpected picking result: %+v", p)
+	}
+}
+
+func ptr(value string) *string { return &value }
