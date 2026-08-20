@@ -10,6 +10,7 @@ import (
 	"github.com/company/pda-backend/internal/wmstask"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -32,18 +33,29 @@ func (s postgresDeliveryAck) AckDelivery(ctx context.Context, eventID string, ac
 	}
 	defer tx.Rollback(ctx)
 	backendRecordedAt := time.Now().UTC()
-	result, err := tx.Exec(ctx, `INSERT INTO pda_event_delivery_ack(event_id,operator_id,device_id,warehouse_id,device_received_at,backend_recorded_at,last_correlation_id) VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT(event_id,operator_id,device_id) DO UPDATE SET last_ack_at=now(),ack_count=pda_event_delivery_ack.ack_count+1,last_correlation_id=EXCLUDED.last_correlation_id,warehouse_id=EXCLUDED.warehouse_id WHERE pda_event_delivery_ack.device_received_at IS NULL OR pda_event_delivery_ack.device_received_at=EXCLUDED.device_received_at`, eventID, actor.OperatorID, actor.DeviceID, actor.WarehouseID, deviceReceivedAt.UTC(), backendRecordedAt, actor.CorrelationID)
+	evidenceEventID := uuid.NewSHA1(uuid.Nil, []byte("PDA.TaskReceivedOnDevice.v1:"+eventID+":"+actor.OperatorID+":"+actor.DeviceID))
+	var ackCount int
+	var storedEvidenceEventID *uuid.UUID
+	err = tx.QueryRow(ctx, `INSERT INTO pda_event_delivery_ack(event_id,operator_id,device_id,warehouse_id,device_received_at,backend_recorded_at,last_correlation_id,evidence_event_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT(event_id,operator_id,device_id) DO UPDATE SET last_ack_at=now(),ack_count=pda_event_delivery_ack.ack_count+1,last_correlation_id=EXCLUDED.last_correlation_id,warehouse_id=EXCLUDED.warehouse_id WHERE pda_event_delivery_ack.device_received_at IS NULL OR pda_event_delivery_ack.device_received_at=EXCLUDED.device_received_at RETURNING ack_count,evidence_event_id`, eventID, actor.OperatorID, actor.DeviceID, actor.WarehouseID, deviceReceivedAt.UTC(), backendRecordedAt, actor.CorrelationID, evidenceEventID).Scan(&ackCount, &storedEvidenceEventID)
+	if err == pgx.ErrNoRows {
+		return &domain.DomainError{Code: "PDA_ACK_TIMESTAMP_CONFLICT", SafeMessage: "Delivery acknowledgement timestamp conflicts with existing evidence"}
+	}
 	if err != nil {
 		return err
 	}
-	if result.RowsAffected() == 0 {
-		return &domain.DomainError{Code: "PDA_ACK_TIMESTAMP_CONFLICT", SafeMessage: "Delivery acknowledgement timestamp conflicts with existing evidence"}
+	if storedEvidenceEventID == nil {
+		storedEvidenceEventID = &evidenceEventID
+		if _, err := tx.Exec(ctx, `UPDATE pda_event_delivery_ack SET evidence_event_id=$1 WHERE event_id=$2 AND operator_id=$3 AND device_id=$4`, evidenceEventID, eventID, actor.OperatorID, actor.DeviceID); err != nil {
+			return err
+		}
 	}
-	payload, _ := json.Marshal(map[string]any{"delivery_event_id": eventID, "operator_id": actor.OperatorID, "device_id": actor.DeviceID, "warehouse_id": actor.WarehouseID, "device_received_at": deviceReceivedAt.UTC(), "backend_recorded_at": backendRecordedAt})
-	outEvent := uuid.New()
-	envelope, _ := json.Marshal(map[string]any{"event_id": outEvent.String(), "event_type": "PDA.TaskReceivedOnDevice.v1", "event_version": 1, "occurred_at": deviceReceivedAt.UTC(), "source_service": "pda-backend", "aggregate_type": "PDAEventDelivery", "aggregate_id": eventID, "aggregate_version": 1, "correlation_id": actor.CorrelationID, "causation_id": eventID, "schema_version": 1, "metadata": map[string]any{"partition_key": eventID}, "payload": json.RawMessage(payload)})
-	if _, err = tx.Exec(ctx, `INSERT INTO integration_outbox(event_id,topic,event_type,aggregate_id,aggregate_version,partition_key,envelope_json) VALUES($1,$2,$3,$4,1,$4,$5) ON CONFLICT(event_id) DO NOTHING`, outEvent, "PDA.TaskReceivedOnDevice.v1", "PDA.TaskReceivedOnDevice.v1", eventID, string(envelope)); err != nil {
-		return err
+	if ackCount == 1 {
+		payload, _ := json.Marshal(map[string]any{"delivery_event_id": eventID, "operator_id": actor.OperatorID, "device_id": actor.DeviceID, "warehouse_id": actor.WarehouseID, "device_received_at": deviceReceivedAt.UTC(), "backend_recorded_at": backendRecordedAt})
+		outEvent := *storedEvidenceEventID
+		envelope, _ := json.Marshal(map[string]any{"event_id": outEvent.String(), "event_type": "PDA.TaskReceivedOnDevice.v1", "event_version": 1, "occurred_at": deviceReceivedAt.UTC(), "source_service": "pda-backend", "aggregate_type": "PDAEventDelivery", "aggregate_id": eventID, "aggregate_version": 1, "correlation_id": actor.CorrelationID, "causation_id": eventID, "schema_version": 1, "metadata": map[string]any{"partition_key": eventID}, "payload": json.RawMessage(payload)})
+		if _, err = tx.Exec(ctx, `INSERT INTO integration_outbox(event_id,topic,event_type,aggregate_id,aggregate_version,partition_key,envelope_json) VALUES($1,$2,$3,$4,1,$4,$5) ON CONFLICT(event_id) DO NOTHING`, outEvent, "PDA.TaskReceivedOnDevice.v1", "PDA.TaskReceivedOnDevice.v1", eventID, string(envelope)); err != nil {
+			return err
+		}
 	}
 	return tx.Commit(ctx)
 }

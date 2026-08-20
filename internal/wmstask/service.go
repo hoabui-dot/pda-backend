@@ -128,51 +128,101 @@ func (s *Service) AckDelivery(ctx context.Context, eventID string, actor Actor, 
 	}
 	defer tx.Rollback(ctx)
 	backendRecordedAt := s.now().UTC()
-	result, err := tx.Exec(ctx, `
+	evidenceEventID := deliveryEvidenceEventID(eventID, actor)
+	var ackCount int
+	var storedEvidenceEventID *uuid.UUID
+	var storedDeviceReceivedAt time.Time
+	err = tx.QueryRow(ctx, `
 INSERT INTO pda_event_delivery_ack(event_id,operator_id,device_id,warehouse_id,device_received_at,backend_recorded_at,last_correlation_id)
 VALUES($1,$2,$3,$4,$5,$6,$7)
 ON CONFLICT(event_id,operator_id,device_id) DO UPDATE SET
   last_ack_at=now(), ack_count=pda_event_delivery_ack.ack_count+1,
   last_correlation_id=EXCLUDED.last_correlation_id, warehouse_id=EXCLUDED.warehouse_id
-WHERE pda_event_delivery_ack.device_received_at IS NULL OR pda_event_delivery_ack.device_received_at=EXCLUDED.device_received_at`, eventID, actor.OperatorID, actor.DeviceID, actor.WarehouseID, deviceReceivedAt.UTC(), backendRecordedAt, actor.CorrelationID)
+	WHERE pda_event_delivery_ack.device_received_at IS NULL OR pda_event_delivery_ack.device_received_at=EXCLUDED.device_received_at
+	RETURNING ack_count,evidence_event_id,device_received_at`, eventID, actor.OperatorID, actor.DeviceID, actor.WarehouseID, deviceReceivedAt.UTC(), backendRecordedAt, actor.CorrelationID).Scan(&ackCount, &storedEvidenceEventID, &storedDeviceReceivedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return errors.New("PDA_ACK_TIMESTAMP_CONFLICT")
+	}
 	if err != nil {
 		return err
 	}
-	if result.RowsAffected() == 0 {
-		return errors.New("PDA_ACK_TIMESTAMP_CONFLICT")
+	if storedEvidenceEventID == nil {
+		storedEvidenceEventID = &evidenceEventID
+		if _, err := tx.Exec(ctx, `UPDATE pda_event_delivery_ack SET evidence_event_id=$1 WHERE event_id=$2 AND operator_id=$3 AND device_id=$4`, evidenceEventID, eventID, actor.OperatorID, actor.DeviceID); err != nil {
+			return err
+		}
 	}
-	if err := appendDeliveryAckEvent(ctx, tx, eventID, actor, deviceReceivedAt.UTC(), backendRecordedAt); err != nil {
-		return err
+	if ackCount == 1 {
+		if err := appendDeliveryAckEvent(ctx, tx, eventID, *storedEvidenceEventID, actor, storedDeviceReceivedAt, backendRecordedAt); err != nil {
+			return err
+		}
 	}
 	return tx.Commit(ctx)
 }
 
-func appendDeliveryAckEvent(ctx context.Context, tx pgx.Tx, deliveryEventID string, actor Actor, deviceReceivedAt, backendRecordedAt time.Time) error {
-	eventID := uuid.New()
+func appendDeliveryAckEvent(ctx context.Context, tx pgx.Tx, deliveryEventID string, evidenceEventID uuid.UUID, actor Actor, deviceReceivedAt, backendRecordedAt time.Time) error {
 	correlation := actor.CorrelationID
 	if correlation == "" {
 		correlation = deliveryEventID
 	}
-	payload, err := json.Marshal(map[string]any{
+	projection, warehouseTaskID, taskVersion, taskType, workOrderID, materialRequestID, sourceEventID, dispatchedAt, mappingError := resolveAckProjection(ctx, tx, deliveryEventID)
+	payloadMap := map[string]any{
 		"delivery_event_id": deliveryEventID, "operator_id": actor.OperatorID,
 		"device_id": actor.DeviceID, "warehouse_id": actor.WarehouseID,
 		"device_received_at": deviceReceivedAt, "backend_recorded_at": backendRecordedAt,
-	})
+		"warehouse_task_id": warehouseTaskID, "task_version": taskVersion, "task_type": taskType,
+		"work_order_id": workOrderID, "material_request_id": materialRequestID,
+		"source_event_id": sourceEventID, "source_dispatched_at": dispatchedAt,
+		"task_projection": projection,
+	}
+	if mappingError != "" {
+		payloadMap["correlation_error"] = mappingError
+	}
+	payload, err := json.Marshal(payloadMap)
 	if err != nil {
 		return err
 	}
 	envelope, err := json.Marshal(map[string]any{
-		"event_id": eventID.String(), "event_type": "PDA.TaskReceivedOnDevice.v1", "event_version": 1,
+		"event_id": evidenceEventID.String(), "event_type": "PDA.TaskReceivedOnDevice.v1", "event_version": 1,
 		"occurred_at": deviceReceivedAt, "source_service": "pda-backend",
-		"aggregate_type": "PDAEventDelivery", "aggregate_id": deliveryEventID,
+		"aggregate_type": "WarehouseTask", "aggregate_id": firstNonEmpty(warehouseTaskID, deliveryEventID),
 		"aggregate_version": 1, "correlation_id": correlation, "causation_id": deliveryEventID,
 		"schema_version": 1, "metadata": map[string]any{"partition_key": deliveryEventID}, "payload": json.RawMessage(payload),
 	})
 	if err != nil {
 		return err
 	}
-	_, err = tx.Exec(ctx, `INSERT INTO integration_outbox(event_id,topic,event_type,aggregate_id,aggregate_version,partition_key,envelope_json) VALUES($1,$2,$3,$4,1,$4,$5) ON CONFLICT(event_id) DO NOTHING`, eventID, "PDA.TaskReceivedOnDevice.v1", "PDA.TaskReceivedOnDevice.v1", deliveryEventID, string(envelope))
+	_, err = tx.Exec(ctx, `INSERT INTO integration_outbox(event_id,topic,event_type,aggregate_id,aggregate_version,partition_key,envelope_json) VALUES($1,$2,$3,$4,1,$4,$5) ON CONFLICT(event_id) DO NOTHING`, evidenceEventID, "PDA.TaskReceivedOnDevice.v1", "PDA.TaskReceivedOnDevice.v1", firstNonEmpty(warehouseTaskID, deliveryEventID), string(envelope))
 	return err
+}
+
+func resolveAckProjection(ctx context.Context, tx pgx.Tx, deliveryEventID string) (map[string]any, string, int64, string, string, string, string, *time.Time, string) {
+	var warehouseTaskID, taskType, workOrderID, materialRequestID, sourceEventID string
+	var taskVersion int64
+	var dispatchedAt time.Time
+	var payload []byte
+	var projection map[string]any
+	err := tx.QueryRow(ctx, `SELECT warehouse_task_id,task_type,task_version,COALESCE(work_order_id,''),COALESCE(material_request_id,''),source_event_id::text,dispatched_at,payload FROM wms_task_projection WHERE source_event_id::text=$1`, deliveryEventID).Scan(&warehouseTaskID, &taskType, &taskVersion, &workOrderID, &materialRequestID, &sourceEventID, &dispatchedAt, &payload)
+	if err != nil {
+		return map[string]any{}, "", 0, "", "", "", "", nil, "WMS_TASK_PROJECTION_NOT_FOUND"
+	}
+	if json.Unmarshal(payload, &projection) != nil {
+		projection = map[string]any{}
+	}
+	return projection, warehouseTaskID, taskVersion, taskType, workOrderID, materialRequestID, sourceEventID, &dispatchedAt, ""
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func deliveryEvidenceEventID(eventID string, actor Actor) uuid.UUID {
+	return uuid.NewSHA1(uuid.Nil, []byte("PDA.TaskReceivedOnDevice.v1:"+eventID+":"+actor.OperatorID+":"+actor.DeviceID))
 }
 
 // List returns the dispatched tasks visible to an operator in one warehouse.
