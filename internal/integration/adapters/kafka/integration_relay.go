@@ -10,6 +10,7 @@ package kafka
 
 import (
 	"context"
+	"encoding/json"
 	"log/slog"
 	"time"
 
@@ -119,10 +120,11 @@ RETURNING o.event_id, o.topic, o.event_type, o.partition_key, o.envelope_json, o
 
 	published := 0
 	for _, item := range batch {
+		envelope := withPublishedAt(item.envelope, time.Now().UTC())
 		writeErr := r.writer.WriteMessages(ctx, kafkago.Message{
 			Topic: item.topic,
 			Key:   []byte(item.key),
-			Value: item.envelope,
+			Value: envelope,
 		})
 		if writeErr == nil {
 			if _, err := r.pool.Exec(ctx, `UPDATE integration_outbox SET published_at=now(), last_error=NULL WHERE event_id=$1`, item.id); err != nil {
@@ -153,6 +155,26 @@ RETURNING o.event_id, o.topic, o.event_type, o.partition_key, o.envelope_json, o
 		}
 	}
 	return published, nil
+}
+
+// withPublishedAt adds the publication boundary at the relay, where the
+// message is actually handed to Kafka. Older producers may omit this field;
+// the relay must make the boundary explicit without changing an existing
+// producer timestamp.
+func withPublishedAt(raw []byte, publishedAt time.Time) []byte {
+	var envelope map[string]any
+	if err := json.Unmarshal(raw, &envelope); err != nil {
+		return raw
+	}
+	if value, ok := envelope["published_at"].(string); ok && value != "" {
+		return raw
+	}
+	envelope["published_at"] = publishedAt.UTC().Format(time.RFC3339Nano)
+	updated, err := json.Marshal(envelope)
+	if err != nil {
+		return raw
+	}
+	return updated
 }
 
 // PendingDepth reports the observability figures required by prompt section 26.

@@ -115,17 +115,63 @@ func New(pool *pgxpool.Pool, now func() time.Time) *Service {
 
 // AckDelivery records device receipt of an SSE event. It has no warehouse
 // side-effect and is idempotent for the event/operator/device tuple.
-func (s *Service) AckDelivery(ctx context.Context, eventID string, actor Actor) error {
+func (s *Service) AckDelivery(ctx context.Context, eventID string, actor Actor, deviceReceivedAt time.Time) error {
 	if strings.TrimSpace(eventID) == "" || actor.OperatorID == "" || actor.DeviceID == "" || actor.WarehouseID == "" {
 		return ErrOperatorRequired
 	}
-	_, err := s.pool.Exec(ctx, `
-INSERT INTO pda_event_delivery_ack(event_id,operator_id,device_id,warehouse_id,last_correlation_id)
-VALUES($1,$2,$3,$4,$5)
+	if deviceReceivedAt.IsZero() {
+		deviceReceivedAt = s.now().UTC()
+	}
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	backendRecordedAt := s.now().UTC()
+	result, err := tx.Exec(ctx, `
+INSERT INTO pda_event_delivery_ack(event_id,operator_id,device_id,warehouse_id,device_received_at,backend_recorded_at,last_correlation_id)
+VALUES($1,$2,$3,$4,$5,$6,$7)
 ON CONFLICT(event_id,operator_id,device_id) DO UPDATE SET
   last_ack_at=now(), ack_count=pda_event_delivery_ack.ack_count+1,
-  last_correlation_id=EXCLUDED.last_correlation_id,
-  warehouse_id=EXCLUDED.warehouse_id`, eventID, actor.OperatorID, actor.DeviceID, actor.WarehouseID, actor.CorrelationID)
+  last_correlation_id=EXCLUDED.last_correlation_id, warehouse_id=EXCLUDED.warehouse_id
+WHERE pda_event_delivery_ack.device_received_at IS NULL OR pda_event_delivery_ack.device_received_at=EXCLUDED.device_received_at`, eventID, actor.OperatorID, actor.DeviceID, actor.WarehouseID, deviceReceivedAt.UTC(), backendRecordedAt, actor.CorrelationID)
+	if err != nil {
+		return err
+	}
+	if result.RowsAffected() == 0 {
+		return errors.New("PDA_ACK_TIMESTAMP_CONFLICT")
+	}
+	if err := appendDeliveryAckEvent(ctx, tx, eventID, actor, deviceReceivedAt.UTC(), backendRecordedAt); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func appendDeliveryAckEvent(ctx context.Context, tx pgx.Tx, deliveryEventID string, actor Actor, deviceReceivedAt, backendRecordedAt time.Time) error {
+	eventID := uuid.New()
+	correlation := actor.CorrelationID
+	if correlation == "" {
+		correlation = deliveryEventID
+	}
+	payload, err := json.Marshal(map[string]any{
+		"delivery_event_id": deliveryEventID, "operator_id": actor.OperatorID,
+		"device_id": actor.DeviceID, "warehouse_id": actor.WarehouseID,
+		"device_received_at": deviceReceivedAt, "backend_recorded_at": backendRecordedAt,
+	})
+	if err != nil {
+		return err
+	}
+	envelope, err := json.Marshal(map[string]any{
+		"event_id": eventID.String(), "event_type": "PDA.TaskReceivedOnDevice.v1", "event_version": 1,
+		"occurred_at": deviceReceivedAt, "source_service": "pda-backend",
+		"aggregate_type": "PDAEventDelivery", "aggregate_id": deliveryEventID,
+		"aggregate_version": 1, "correlation_id": correlation, "causation_id": deliveryEventID,
+		"schema_version": 1, "metadata": map[string]any{"partition_key": deliveryEventID}, "payload": json.RawMessage(payload),
+	})
+	if err != nil {
+		return err
+	}
+	_, err = tx.Exec(ctx, `INSERT INTO integration_outbox(event_id,topic,event_type,aggregate_id,aggregate_version,partition_key,envelope_json) VALUES($1,$2,$3,$4,1,$4,$5) ON CONFLICT(event_id) DO NOTHING`, eventID, "PDA.TaskReceivedOnDevice.v1", "PDA.TaskReceivedOnDevice.v1", deliveryEventID, string(envelope))
 	return err
 }
 
