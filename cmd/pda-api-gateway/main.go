@@ -96,8 +96,9 @@ func main() {
 		shippingRemote := wmshttp.NewShippingAdapter(client)
 		putawayRemote := wmshttp.NewPutawayAdapter(client)
 		pickingRemote := wmshttp.NewPickingAdapter(client)
+		traceRemote := client
 		replenishmentRemote := wmshttp.NewReplenishmentAdapter(client)
-		handler, handlerErr := httpadapter.New(identityService, taskRemote, receivingRemote, putawayRemote, pickingRemote, replenishmentRemote, movementRemote, inventoryRemote, shippingRemote, nil, httpadapter.Settings{RequestTimeout: 5 * time.Second, AuthRateLimit: 10, RateWindow: time.Minute, CircuitFailureThreshold: 5}, slog.Default(), time.Now)
+		handler, handlerErr := httpadapter.NewWithDeliveryAck(identityService, taskRemote, receivingRemote, putawayRemote, pickingRemote, replenishmentRemote, movementRemote, inventoryRemote, shippingRemote, nil, pool, httpadapter.Settings{RequestTimeout: 5 * time.Second, AuthRateLimit: 10, RateWindow: time.Minute, CircuitFailureThreshold: 5}, slog.Default(), time.Now, traceRemote)
 		if handlerErr != nil {
 			slog.Error("HTTP WMS gateway composition rejected", "error", handlerErr)
 			os.Exit(1)

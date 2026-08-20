@@ -57,8 +57,14 @@ type wmsTaskPayload struct {
 	WarehouseID   string `json:"warehouse_id"`
 	WarehouseCode string `json:"warehouse_code"`
 
-	SourceLocationID      string `json:"source_location_id"`
-	DestinationLocationID string `json:"destination_location_id"`
+	SourceLocationID        string `json:"source_location_id"`
+	SourceLocationCode      string `json:"source_location_code"`
+	SourceBinID             string `json:"source_bin_id"`
+	SourceBinCode           string `json:"source_bin_code"`
+	DestinationLocationID   string `json:"destination_location_id"`
+	DestinationLocationCode string `json:"destination_location_code"`
+	DestinationBinID        string `json:"destination_bin_id"`
+	DestinationBinCode      string `json:"destination_bin_code"`
 
 	WorkOrderID           string `json:"work_order_id"`
 	WorkOrderCode         string `json:"work_order_code"`
@@ -79,7 +85,9 @@ type wmsTaskPayload struct {
 
 	LotID         string   `json:"lot_id"`
 	LotCode       string   `json:"lot_code"`
+	LPNCode       string   `json:"lpn_code"`
 	SerialNumbers []string `json:"serial_numbers"`
+	Allocations   []any    `json:"allocations"`
 
 	ScanRequirements []string `json:"scan_requirements"`
 
@@ -277,7 +285,19 @@ func (c *WMSTaskConsumer) process(ctx context.Context, message kafkago.Message) 
 		return tx.Commit(ctx)
 	}
 
-	if err := upsertProjection(ctx, tx, eventID, payload, envelope.Payload); err != nil {
+	var sourceDispatchedAt *time.Time
+	if envelope.OccurredAt != "" {
+		parsed, parseErr := parseTimestamp(envelope.OccurredAt)
+		if parseErr != nil {
+			return c.deadLetter(ctx, eventID, envelope.EventType, "INVALID_OCCURRED_AT", message)
+		}
+		sourceDispatchedAt = &parsed
+	}
+	backendReceivedAt := message.Time.UTC()
+	if backendReceivedAt.IsZero() {
+		backendReceivedAt = time.Now().UTC()
+	}
+	if err := upsertProjection(ctx, tx, eventID, payload, envelope.Payload, sourceDispatchedAt, backendReceivedAt); err != nil {
 		return err
 	}
 	if err := syncOperatorQueue(ctx, tx, payload, category, status); err != nil {
@@ -286,12 +306,16 @@ func (c *WMSTaskConsumer) process(ctx context.Context, message kafkago.Message) 
 	return tx.Commit(ctx)
 }
 
-func upsertProjection(ctx context.Context, tx pgx.Tx, eventID uuid.UUID, p wmsTaskPayload, raw json.RawMessage) error {
+func upsertProjection(ctx context.Context, tx pgx.Tx, eventID uuid.UUID, p wmsTaskPayload, raw json.RawMessage, sourceDispatchedAt *time.Time, backendReceivedAt time.Time) error {
 	serials, err := json.Marshal(nonNilStrings(p.SerialNumbers))
 	if err != nil {
 		return err
 	}
 	scans, err := json.Marshal(nonNilStrings(p.ScanRequirements))
+	if err != nil {
+		return err
+	}
+	allocations, err := json.Marshal(nonNilValues(p.Allocations))
 	if err != nil {
 		return err
 	}
@@ -303,7 +327,8 @@ INSERT INTO wms_task_projection (
   item_id, item_code, revision_id, revision_code,
   requested_quantity, confirmed_quantity, remaining_quantity, uom_id, uom_code,
   lot_id, lot_code, serial_numbers, scan_requirements,
-  correlation_id, causation_id, payload, source_event_id, updated_at
+  correlation_id, causation_id, payload, source_event_id, source_dispatched_at, backend_received_at,
+  source_location_code, source_bin_id, source_bin_code, destination_location_code, destination_bin_id, destination_bin_code, lpn_code, allocations, updated_at
 ) VALUES (
   $1,$2,$3,$4,$5,
   NULLIF($6,''),$7,NULLIF($32,''),NULLIF($8,''),NULLIF($9,''),
@@ -311,7 +336,8 @@ INSERT INTO wms_task_projection (
   NULLIF($15,''),NULLIF($16,''),NULLIF($17,''),NULLIF($18,''),
   $19,$20,$21,NULLIF($22,''),NULLIF($23,''),
   NULLIF($24,''),NULLIF($25,''),$26::jsonb,$27::jsonb,
-  NULLIF($28,''),NULLIF($29,''),$30::jsonb,$31,now()
+  NULLIF($28,''),NULLIF($29,''),$30::jsonb,$31,$33,$34,
+  NULLIF($35,''),NULLIF($36,''),NULLIF($37,''),NULLIF($38,''),NULLIF($39,''),NULLIF($40,''),NULLIF($41,''),$42::jsonb,now()
 )
 ON CONFLICT (warehouse_task_id) DO UPDATE SET
   task_type=EXCLUDED.task_type, task_version=EXCLUDED.task_version, status=EXCLUDED.status,
@@ -327,14 +353,20 @@ ON CONFLICT (warehouse_task_id) DO UPDATE SET
   lot_id=EXCLUDED.lot_id, lot_code=EXCLUDED.lot_code, serial_numbers=EXCLUDED.serial_numbers,
   scan_requirements=EXCLUDED.scan_requirements,
   correlation_id=EXCLUDED.correlation_id, causation_id=EXCLUDED.causation_id,
-  payload=EXCLUDED.payload, source_event_id=EXCLUDED.source_event_id, updated_at=now()`,
+  payload=EXCLUDED.payload, source_event_id=EXCLUDED.source_event_id,
+  source_dispatched_at=COALESCE(EXCLUDED.source_dispatched_at,wms_task_projection.source_dispatched_at),
+  backend_received_at=LEAST(wms_task_projection.backend_received_at,EXCLUDED.backend_received_at),
+  source_location_code=EXCLUDED.source_location_code, source_bin_id=EXCLUDED.source_bin_id, source_bin_code=EXCLUDED.source_bin_code,
+  destination_location_code=EXCLUDED.destination_location_code, destination_bin_id=EXCLUDED.destination_bin_id, destination_bin_code=EXCLUDED.destination_bin_code,
+  lpn_code=EXCLUDED.lpn_code, allocations=EXCLUDED.allocations, updated_at=now()`,
 		p.WarehouseTaskID, strings.ToUpper(p.TaskType), p.TaskVersion, strings.ToUpper(p.Status), priorityOrDefault(p.Priority),
 		p.SiteID, p.WarehouseID, p.SourceLocationID, p.DestinationLocationID,
 		p.WorkOrderID, p.WorkOrderCode, p.MaterialRequestID, p.MaterialRequestLineID, p.ExpectedReceiptID,
 		p.ItemID, p.ItemCode, p.RevisionID, p.RevisionCode,
 		p.RequestedQuantity, p.ConfirmedQuantity, p.RemainingQuantity, p.UOMID, p.UOMCode,
 		p.LotID, p.LotCode, string(serials), string(scans),
-		p.CorrelationID, p.CausationID, string(raw), eventID, p.WarehouseCode)
+		p.CorrelationID, p.CausationID, string(raw), eventID, p.WarehouseCode, sourceDispatchedAt, backendReceivedAt,
+		p.SourceLocationCode, p.SourceBinID, p.SourceBinCode, p.DestinationLocationCode, p.DestinationBinID, p.DestinationBinCode, p.LPNCode, string(allocations))
 	return err
 }
 
@@ -397,6 +429,13 @@ func priorityOrDefault(priority int) int {
 func nonNilStrings(values []string) []string {
 	if values == nil {
 		return []string{}
+	}
+	return values
+}
+
+func nonNilValues(values []any) []any {
+	if values == nil {
+		return []any{}
 	}
 	return values
 }

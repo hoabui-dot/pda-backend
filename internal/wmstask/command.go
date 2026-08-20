@@ -286,7 +286,8 @@ func scanTask(row rowScanner) (Task, error) {
 	err := row.Scan(&t.WarehouseTaskID, &t.PDATaskID, &t.TaskType, &t.TaskVersion, &t.WMSStatus,
 		&t.ExecutionState, &t.Priority, &t.WarehouseID,
 		&t.WorkOrderCode, &t.ItemCode, &t.RevisionID, &t.LotID,
-		&t.SourceLocationID, &t.DestinationID,
+		&t.SourceLocationID, &t.SourceLocationCode, &t.SourceBinID, &t.SourceBinCode,
+		&t.DestinationID, &t.DestinationCode, &t.DestinationBinID, &t.DestinationBinCode, &t.LPNCode, &t.Allocations,
 		&t.RequestedQty, &t.ConfirmedQty, &t.RemainingQty, &t.UOMCode,
 		&scans, &t.OperatorID, &t.CorrelationID)
 	if err != nil {
@@ -306,7 +307,8 @@ func readTask(ctx context.Context, tx pgx.Tx, taskID string) (Task, error) {
 SELECT p.warehouse_task_id, COALESCE(e.pda_task_id::text,''), p.task_type, p.task_version, p.status,
        COALESCE(e.state,'DISPATCHED'), p.priority, p.warehouse_id,
        COALESCE(p.work_order_code,''), COALESCE(p.item_code,''), COALESCE(p.revision_id,''), COALESCE(p.lot_id,''),
-       COALESCE(p.source_location_id,''), COALESCE(p.destination_location_id,''),
+       COALESCE(p.source_location_id,''), COALESCE(p.source_location_code,''), COALESCE(p.source_bin_id,''), COALESCE(p.source_bin_code,''),
+       COALESCE(p.destination_location_id,''), COALESCE(p.destination_location_code,''), COALESCE(p.destination_bin_id,''), COALESCE(p.destination_bin_code,''), COALESCE(p.lpn_code,''), p.allocations,
        p.requested_quantity, COALESCE(e.confirmed_quantity,0), p.remaining_quantity, COALESCE(p.uom_code,''),
        p.scan_requirements, COALESCE(e.operator_id,''), COALESCE(p.correlation_id,'')
 FROM wms_task_projection p

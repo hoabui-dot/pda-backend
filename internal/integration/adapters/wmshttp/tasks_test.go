@@ -100,6 +100,25 @@ func TestMapMovementTaskUsesLPNFlowForInboundReceipt(t *testing.T) {
 	}
 }
 
+func TestMapMovementTaskUsesSourceDestinationFlowForPicking(t *testing.T) {
+	task := mapMovementTask(executionTask{
+		TaskID: "picking-1", TaskType: "PICKING", Status: "IN_PROGRESS", WarehouseID: "warehouse-1",
+		Details: map[string]any{
+			"source_location_id": "source-1", "item_code": "ITEM-001", "lot_code": "LOT-001",
+			"destination_location_id": "staging-1", "qty": float64(2),
+		},
+	}, "PICKING")
+	want := []string{"SOURCE", "DESTINATION"}
+	if len(task.ScanRequirements) != len(want) {
+		t.Fatalf("scan requirements = %v, want %v", task.ScanRequirements, want)
+	}
+	for i := range want {
+		if task.ScanRequirements[i] != want[i] {
+			t.Fatalf("scan requirements = %v, want %v", task.ScanRequirements, want)
+		}
+	}
+}
+
 func TestMapMovementTaskUsesLPNLotFlowForGroupedInboundReceipt(t *testing.T) {
 	task := mapMovementTask(executionTask{
 		TaskID: "putaway-group-1", TaskType: "PUTAWAY", Status: "PARTIALLY_COMPLETED", WarehouseID: "warehouse-1",

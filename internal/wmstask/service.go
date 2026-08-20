@@ -17,6 +17,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -68,28 +69,36 @@ type Actor struct {
 
 // Task is the device-facing view of a dispatched warehouse task.
 type Task struct {
-	WarehouseTaskID  string   `json:"warehouseTaskId"`
-	PDATaskID        string   `json:"pdaTaskId"`
-	TaskType         string   `json:"taskType"`
-	TaskVersion      int64    `json:"taskVersion"`
-	WMSStatus        string   `json:"wmsStatus"`
-	ExecutionState   string   `json:"executionState"`
-	Priority         int      `json:"priority"`
-	WarehouseID      string   `json:"warehouseId"`
-	WorkOrderCode    string   `json:"workOrderCode,omitempty"`
-	ItemCode         string   `json:"itemCode,omitempty"`
-	RevisionID       string   `json:"revisionId,omitempty"`
-	LotID            string   `json:"lotId,omitempty"`
-	SourceLocationID string   `json:"sourceLocationId,omitempty"`
-	DestinationID    string   `json:"destinationLocationId,omitempty"`
-	RequestedQty     float64  `json:"requestedQuantity"`
-	ConfirmedQty     float64  `json:"confirmedQuantity"`
-	RemainingQty     float64  `json:"remainingQuantity"`
-	UOMCode          string   `json:"uomCode,omitempty"`
-	ScanRequirements []string `json:"scanRequirements"`
-	CompletedScans   []string `json:"completedScans"`
-	OperatorID       string   `json:"operatorId,omitempty"`
-	CorrelationID    string   `json:"correlationId,omitempty"`
+	WarehouseTaskID    string          `json:"warehouseTaskId"`
+	PDATaskID          string          `json:"pdaTaskId"`
+	TaskType           string          `json:"taskType"`
+	TaskVersion        int64           `json:"taskVersion"`
+	WMSStatus          string          `json:"wmsStatus"`
+	ExecutionState     string          `json:"executionState"`
+	Priority           int             `json:"priority"`
+	WarehouseID        string          `json:"warehouseId"`
+	WorkOrderCode      string          `json:"workOrderCode,omitempty"`
+	ItemCode           string          `json:"itemCode,omitempty"`
+	RevisionID         string          `json:"revisionId,omitempty"`
+	LotID              string          `json:"lotId,omitempty"`
+	SourceLocationID   string          `json:"sourceLocationId,omitempty"`
+	SourceLocationCode string          `json:"sourceLocationCode,omitempty"`
+	SourceBinID        string          `json:"sourceBinId,omitempty"`
+	SourceBinCode      string          `json:"sourceBinCode,omitempty"`
+	DestinationID      string          `json:"destinationLocationId,omitempty"`
+	DestinationCode    string          `json:"destinationLocationCode,omitempty"`
+	DestinationBinID   string          `json:"destinationBinId,omitempty"`
+	DestinationBinCode string          `json:"destinationBinCode,omitempty"`
+	LPNCode            string          `json:"lpnCode,omitempty"`
+	Allocations        json.RawMessage `json:"allocations,omitempty"`
+	RequestedQty       float64         `json:"requestedQuantity"`
+	ConfirmedQty       float64         `json:"confirmedQuantity"`
+	RemainingQty       float64         `json:"remainingQuantity"`
+	UOMCode            string          `json:"uomCode,omitempty"`
+	ScanRequirements   []string        `json:"scanRequirements"`
+	CompletedScans     []string        `json:"completedScans"`
+	OperatorID         string          `json:"operatorId,omitempty"`
+	CorrelationID      string          `json:"correlationId,omitempty"`
 }
 
 type Service struct {
@@ -104,13 +113,30 @@ func New(pool *pgxpool.Pool, now func() time.Time) *Service {
 	return &Service{pool: pool, now: now}
 }
 
+// AckDelivery records device receipt of an SSE event. It has no warehouse
+// side-effect and is idempotent for the event/operator/device tuple.
+func (s *Service) AckDelivery(ctx context.Context, eventID string, actor Actor) error {
+	if strings.TrimSpace(eventID) == "" || actor.OperatorID == "" || actor.DeviceID == "" || actor.WarehouseID == "" {
+		return ErrOperatorRequired
+	}
+	_, err := s.pool.Exec(ctx, `
+INSERT INTO pda_event_delivery_ack(event_id,operator_id,device_id,warehouse_id,last_correlation_id)
+VALUES($1,$2,$3,$4,$5)
+ON CONFLICT(event_id,operator_id,device_id) DO UPDATE SET
+  last_ack_at=now(), ack_count=pda_event_delivery_ack.ack_count+1,
+  last_correlation_id=EXCLUDED.last_correlation_id,
+  warehouse_id=EXCLUDED.warehouse_id`, eventID, actor.OperatorID, actor.DeviceID, actor.WarehouseID, actor.CorrelationID)
+	return err
+}
+
 // List returns the dispatched tasks visible to an operator in one warehouse.
 func (s *Service) List(ctx context.Context, warehouseID, state string) ([]Task, error) {
 	rows, err := s.pool.Query(ctx, `
 SELECT p.warehouse_task_id, COALESCE(e.pda_task_id::text,''), p.task_type, p.task_version, p.status,
        COALESCE(e.state,'DISPATCHED'), p.priority, p.warehouse_id,
        COALESCE(p.work_order_code,''), COALESCE(p.item_code,''), COALESCE(p.revision_id,''), COALESCE(p.lot_id,''),
-       COALESCE(p.source_location_id,''), COALESCE(p.destination_location_id,''),
+       COALESCE(p.source_location_id,''), COALESCE(p.source_location_code,''), COALESCE(p.source_bin_id,''), COALESCE(p.source_bin_code,''),
+       COALESCE(p.destination_location_id,''), COALESCE(p.destination_location_code,''), COALESCE(p.destination_bin_id,''), COALESCE(p.destination_bin_code,''), COALESCE(p.lpn_code,''), p.allocations,
        p.requested_quantity, COALESCE(e.confirmed_quantity,0), p.remaining_quantity, COALESCE(p.uom_code,''),
        p.scan_requirements, COALESCE(e.operator_id,''), COALESCE(p.correlation_id,'')
 FROM wms_task_projection p
@@ -140,7 +166,8 @@ func (s *Service) Get(ctx context.Context, taskID string) (Task, error) {
 SELECT p.warehouse_task_id, COALESCE(e.pda_task_id::text,''), p.task_type, p.task_version, p.status,
        COALESCE(e.state,'DISPATCHED'), p.priority, p.warehouse_id,
        COALESCE(p.work_order_code,''), COALESCE(p.item_code,''), COALESCE(p.revision_id,''), COALESCE(p.lot_id,''),
-       COALESCE(p.source_location_id,''), COALESCE(p.destination_location_id,''),
+       COALESCE(p.source_location_id,''), COALESCE(p.source_location_code,''), COALESCE(p.source_bin_id,''), COALESCE(p.source_bin_code,''),
+       COALESCE(p.destination_location_id,''), COALESCE(p.destination_location_code,''), COALESCE(p.destination_bin_id,''), COALESCE(p.destination_bin_code,''), COALESCE(p.lpn_code,''), p.allocations,
        p.requested_quantity, COALESCE(e.confirmed_quantity,0), p.remaining_quantity, COALESCE(p.uom_code,''),
        p.scan_requirements, COALESCE(e.operator_id,''), COALESCE(p.correlation_id,'')
 FROM wms_task_projection p

@@ -132,3 +132,9 @@ type ReceivingScanContextOperations interface {
 type ReceivingBatchOperations interface {
 	ConfirmBatch(context.Context, receivingapp.BatchConfirmCommand) (receivingdomain.Task, error)
 }
+
+// FinishedProductTraceOperations is a read-only BFF boundary. The PDA
+// gateway exposes this contract without leaking WMS or MES repositories.
+type FinishedProductTraceOperations interface {
+	Trace(context.Context, string, platform.ActorContext) (map[string]any, error)
+}

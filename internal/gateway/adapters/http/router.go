@@ -29,6 +29,7 @@ import (
 	"github.com/company/pda-backend/internal/wmstask"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 type Settings struct {
@@ -46,28 +47,49 @@ func (s Settings) Validate() error {
 }
 
 type Router struct {
-	identity         *identityapp.Service
-	tasks            gatewayports.TaskOperations
-	receiving        gatewayports.ReceivingOperations
-	putaway          gatewayports.PutawayOperations
-	picking          gatewayports.PickingOperations
-	replenishment    gatewayports.ReplenishmentOperations
-	movementCommands gatewayports.MovementCommandOperations
-	inventory        gatewayports.InventoryOperations
-	shipping         gatewayports.ShippingOperations
-	wmsTasks         *wmstask.Service
-	settings         Settings
-	limiter          *rateLimiter
-	logger           *slog.Logger
-	now              func() time.Time
-	breaker          *gatewayBreaker
+	identity                *identityapp.Service
+	tasks                   gatewayports.TaskOperations
+	receiving               gatewayports.ReceivingOperations
+	putaway                 gatewayports.PutawayOperations
+	picking                 gatewayports.PickingOperations
+	replenishment           gatewayports.ReplenishmentOperations
+	movementCommands        gatewayports.MovementCommandOperations
+	inventory               gatewayports.InventoryOperations
+	shipping                gatewayports.ShippingOperations
+	finishedProductTraceOps gatewayports.FinishedProductTraceOperations
+	wmsTasks                *wmstask.Service
+	deliveryAcks            deliveryAcknowledger
+	settings                Settings
+	limiter                 *rateLimiter
+	logger                  *slog.Logger
+	now                     func() time.Time
+	breaker                 *gatewayBreaker
 }
 
-func New(identityService *identityapp.Service, taskService gatewayports.TaskOperations, receivingService gatewayports.ReceivingOperations, putaway gatewayports.PutawayOperations, picking gatewayports.PickingOperations, replenishment gatewayports.ReplenishmentOperations, movementCommands gatewayports.MovementCommandOperations, inventoryService gatewayports.InventoryOperations, shippingService gatewayports.ShippingOperations, wmsTaskService *wmstask.Service, settings Settings, logger *slog.Logger, now func() time.Time) (http.Handler, error) {
+func New(identityService *identityapp.Service, taskService gatewayports.TaskOperations, receivingService gatewayports.ReceivingOperations, putaway gatewayports.PutawayOperations, picking gatewayports.PickingOperations, replenishment gatewayports.ReplenishmentOperations, movementCommands gatewayports.MovementCommandOperations, inventoryService gatewayports.InventoryOperations, shippingService gatewayports.ShippingOperations, wmsTaskService *wmstask.Service, settings Settings, logger *slog.Logger, now func() time.Time, traceOps ...gatewayports.FinishedProductTraceOperations) (http.Handler, error) {
+	return newRouter(identityService, taskService, receivingService, putaway, picking, replenishment, movementCommands, inventoryService, shippingService, wmsTaskService, nil, settings, logger, now, traceOps...)
+}
+
+// NewWithDeliveryAck is used by the standalone WMS HTTP runtime. Its task
+// projection service is intentionally absent in that mode, but delivery ACKs
+// still belong to the PDA Backend database and must remain durable.
+func NewWithDeliveryAck(identityService *identityapp.Service, taskService gatewayports.TaskOperations, receivingService gatewayports.ReceivingOperations, putaway gatewayports.PutawayOperations, picking gatewayports.PickingOperations, replenishment gatewayports.ReplenishmentOperations, movementCommands gatewayports.MovementCommandOperations, inventoryService gatewayports.InventoryOperations, shippingService gatewayports.ShippingOperations, wmsTaskService *wmstask.Service, ackPool *pgxpool.Pool, settings Settings, logger *slog.Logger, now func() time.Time, traceOps ...gatewayports.FinishedProductTraceOperations) (http.Handler, error) {
+	return newRouter(identityService, taskService, receivingService, putaway, picking, replenishment, movementCommands, inventoryService, shippingService, wmsTaskService, ackPool, settings, logger, now, traceOps...)
+}
+
+func newRouter(identityService *identityapp.Service, taskService gatewayports.TaskOperations, receivingService gatewayports.ReceivingOperations, putaway gatewayports.PutawayOperations, picking gatewayports.PickingOperations, replenishment gatewayports.ReplenishmentOperations, movementCommands gatewayports.MovementCommandOperations, inventoryService gatewayports.InventoryOperations, shippingService gatewayports.ShippingOperations, wmsTaskService *wmstask.Service, ackPool *pgxpool.Pool, settings Settings, logger *slog.Logger, now func() time.Time, traceOps ...gatewayports.FinishedProductTraceOperations) (http.Handler, error) {
 	if err := settings.Validate(); err != nil {
 		return nil, err
 	}
-	router := &Router{identity: identityService, tasks: taskService, receiving: receivingService, putaway: putaway, picking: picking, replenishment: replenishment, movementCommands: movementCommands, inventory: inventoryService, shipping: shippingService, wmsTasks: wmsTaskService, settings: settings, limiter: newRateLimiter(settings.AuthRateLimit, settings.RateWindow, now), logger: logger, now: now, breaker: newGatewayBreaker(settings.CircuitFailureThreshold, settings.RateWindow, now)}
+	var finishedProductTrace gatewayports.FinishedProductTraceOperations
+	if len(traceOps) > 0 {
+		finishedProductTrace = traceOps[0]
+	}
+	var deliveryAck deliveryAcknowledger
+	if ackPool != nil {
+		deliveryAck = postgresDeliveryAck{pool: ackPool}
+	}
+	router := &Router{identity: identityService, tasks: taskService, receiving: receivingService, putaway: putaway, picking: picking, replenishment: replenishment, movementCommands: movementCommands, inventory: inventoryService, shipping: shippingService, finishedProductTraceOps: finishedProductTrace, wmsTasks: wmsTaskService, deliveryAcks: deliveryAck, settings: settings, limiter: newRateLimiter(settings.AuthRateLimit, settings.RateWindow, now), logger: logger, now: now, breaker: newGatewayBreaker(settings.CircuitFailureThreshold, settings.RateWindow, now)}
 	r := chi.NewRouter()
 	r.Use(router.correlation, router.locale, router.logging, router.circuitBreak)
 	r.Get("/healthz", router.operational)
@@ -84,9 +106,11 @@ func New(identityService *identityapp.Service, taskService gatewayports.TaskOper
 			protected.Post("/devices/registrations", router.registerDevice)
 			protected.With(router.deviceWarehouseContext).Get("/bootstrap", router.bootstrap)
 			protected.With(router.deviceWarehouseContext).Get("/dashboard", router.dashboard)
+			protected.With(router.deviceWarehouseContext).Get("/finished-products/{barcode}/trace", router.finishedProductTrace)
 			protected.With(router.deviceWarehouseContext).Get("/tasks/summary", router.taskSummary)
 			protected.With(router.deviceWarehouseContext).Get("/tasks", router.tasksList)
 			protected.With(router.deviceWarehouseContext).Get("/events", router.taskEvents)
+			protected.With(router.deviceWarehouseContext).Post("/events/{eventId}/ack", router.deliveryAck)
 			protected.With(router.deviceWarehouseContext).Get("/tasks/{taskId}", router.taskDetail)
 			protected.With(router.deviceWarehouseContext).Post("/tasks/{taskId}/claim", router.claimTask)
 			protected.With(router.deviceWarehouseContext).Post("/tasks/{taskId}/release", router.releaseTask)
@@ -1210,11 +1234,11 @@ func writeError(w http.ResponseWriter, err error, correlationID string) {
 		status = http.StatusForbidden
 	case "RATE_LIMITED":
 		status = http.StatusTooManyRequests
-	case "GATEWAY_CIRCUIT_OPEN", "UPSTREAM_WMS_UNAVAILABLE", "MESSAGING_PUBLISH_PENDING":
+	case "GATEWAY_CIRCUIT_OPEN", "UPSTREAM_WMS_UNAVAILABLE", "MES_TRACE_TEMPORARILY_UNAVAILABLE", "WMS_TRACE_UNAVAILABLE", "MES_EXECUTION_TRACE_UNAVAILABLE", "MES_TRACEABILITY_UNAVAILABLE", "MESSAGING_PUBLISH_PENDING":
 		status = http.StatusServiceUnavailable
-	case "TASK_LOCKED", "TASK_VERSION_CONFLICT", "SHIPMENT_VERSION_CONFLICT", "DUPLICATE_COMMAND", "IDEMPOTENCY_KEY_REUSED", "VERSION_CONFLICT", "IDEMPOTENCY_CONFLICT", "RECEIPT_NOT_CONFIRMABLE", "OVER_RECEIPT_APPROVAL_REQUIRED", "UPSTREAM_CONFLICT":
+	case "FINISHED_PRODUCT_BARCODE_AMBIGUOUS", "TASK_LOCKED", "TASK_VERSION_CONFLICT", "SHIPMENT_VERSION_CONFLICT", "DUPLICATE_COMMAND", "IDEMPOTENCY_KEY_REUSED", "VERSION_CONFLICT", "IDEMPOTENCY_CONFLICT", "RECEIPT_NOT_CONFIRMABLE", "OVER_RECEIPT_APPROVAL_REQUIRED", "UPSTREAM_CONFLICT":
 		status = http.StatusConflict
-	case "TASK_NOT_FOUND", "INVENTORY_NOT_FOUND", "SHIPMENT_NOT_FOUND", "COMMAND_NOT_FOUND", "RECEIPT_NOT_FOUND", "UPSTREAM_NOT_FOUND":
+	case "FINISHED_PRODUCT_NOT_FOUND", "TASK_NOT_FOUND", "INVENTORY_NOT_FOUND", "SHIPMENT_NOT_FOUND", "COMMAND_NOT_FOUND", "RECEIPT_NOT_FOUND", "UPSTREAM_NOT_FOUND":
 		status = http.StatusNotFound
 	case "BARCODE_UNKNOWN", "BARCODE_WRONG_CONTEXT", "QUANTITY_EXCEEDS_ALLOWED", "REMARK_REQUIRED", "CONDITION_INVALID", "RECEIVING_TASK_INCOMPLETE", "TASK_NOT_ASSIGNED", "TASK_ALREADY_COMPLETED", "SOURCE_LOCATION_INVALID", "DESTINATION_LOCATION_INVALID", "ITEM_INVALID", "VALIDATION_SEQUENCE_INVALID", "SCAN_MISMATCH", "INSUFFICIENT_STOCK", "LOCATION_CAPACITY_EXCEEDED", "TASK_INCOMPLETE", "PUTAWAY_GROUP_INCOMPLETE", "SOURCE_EQUALS_DESTINATION", "SHIPMENT_NOT_READY", "PACKAGE_INCOMPLETE", "CARRIER_INVALID", "TRACKING_INVALID", "SHIPMENT_ALREADY_CONFIRMED", "COUNT_VARIANCE_REQUIRES_REVIEW", "ITEM_NOT_IN_DOCUMENT", "LOCATION_INVALID", "RECEIPT_LINE_MISMATCH", "RECEIPT_QUANTITY_INVALID", "RECEIPT_BATCH_LINE_INVALID", "RECEIPT_BATCH_LINES_INCOMPLETE", "RECEIPT_BATCH_DUPLICATE_LINE", "RECEIPT_LOT_DIMENSION_MISMATCH", "RECEIPT_LINE_FAILED_FINAL", "INVALID_INVENTORY_REQUEST":
 		status = http.StatusUnprocessableEntity

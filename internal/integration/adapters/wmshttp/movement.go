@@ -194,7 +194,11 @@ func mapMovementTask(row executionTask, workflow string) movementdomain.Task {
 		status = movementdomain.New
 	}
 	lot := stringValue(row.Details, "lot_code", "lot_id")
-	requirements := []string{"SOURCE", "ITEM", "DESTINATION"}
+	// Production Picking verifies the allocated source, operator quantity and
+	// assigned destination. Item and lot are already authoritative in the
+	// Inventory reservation/task snapshot and are not additional operator scans
+	// for this workflow.
+	requirements := []string{"SOURCE", "DESTINATION"}
 	inboundReceipt := strings.EqualFold(stringValue(row.Details, "source_type"), "INBOUND_RECEIPT")
 	if inboundReceipt {
 		if _, grouped := row.Details["lines"]; grouped {
@@ -202,6 +206,8 @@ func mapMovementTask(row executionTask, workflow string) movementdomain.Task {
 		} else {
 			requirements = []string{"LPN", "DESTINATION"}
 		}
+	} else if strings.EqualFold(workflow, "PICKING") {
+		requirements = []string{"SOURCE", "DESTINATION"}
 	} else if lot != "" {
 		requirements = []string{"SOURCE", "ITEM", "LOT", "DESTINATION"}
 	}
